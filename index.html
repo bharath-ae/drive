@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DrivePro - Driving School Management System</title>
+<title>First Gear - Driving School Management System</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75' font-weight='bold' fill='%23e8b84b'>D</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <!-- Firebase SDK -->
@@ -421,7 +421,7 @@
     <div class="splash-logo">
       <div class="logo-icon">🚗</div>
       <div>
-        <h1>DrivePro</h1>
+        <h1>First Gear</h1>
         <p>Driving School Management System</p>
       </div>
     </div>
@@ -650,7 +650,7 @@
     <aside class="sidebar">
       <div class="sidebar-logo">
         <div class="li">🚗</div>
-        <span>DrivePro</span>
+        <span>First Gear</span>
       </div>
       <div class="sidebar-role">
         Role<strong id="sidebar-role-name">Owner Panel</strong>
@@ -824,8 +824,8 @@
         </div>
         <div class="card" style="padding:0;overflow:hidden">
           <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;">
-            <input type="text" placeholder="🔍  Search students..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" oninput="filterStudents(this.value)">
-            <select style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" onchange="filterStudents(document.querySelector('input[placeholder*=Search]').value, this.value)">
+            <input id="students-search-input" type="text" placeholder="🔍  Search by name, student ID, phone, email, instructor..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" oninput="filterStudents(this.value)">
+            <select id="students-status-filter" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" onchange="filterStudents(document.getElementById('students-search-input').value, this.value)">
               <option value="">All Status</option>
               <option value="Active">Active</option>
               <option value="Completed">Completed</option>
@@ -833,7 +833,7 @@
             </select>
           </div>
           <table class="data-table">
-            <thead><tr><th>Name</th><th>Phone</th><th>Vehicle</th><th>Instructor</th><th>Classes</th><th>Status</th><th>Action</th></tr></thead>
+            <thead><tr><th>Student ID</th><th>Name</th><th>Phone</th><th>Vehicle</th><th>Instructor</th><th>Classes</th><th>Status</th><th>Action</th></tr></thead>
             <tbody id="students-table"></tbody>
           </table>
         </div>
@@ -861,16 +861,29 @@
 
       <div class="page" id="page-reports">
         <div class="page-header">
-          <div><h2>Reports</h2><p>Monthly & yearly financial reports</p></div>
-          <div class="flex gap-10">
-            <select id="report-period" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" onchange="renderReport()">
+          <div><h2>📊 Reports</h2><p>Monthly &amp; yearly financial reports</p></div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <select id="report-period" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" onchange="onReportPeriodChange()">
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
             </select>
-            <button class="btn btn-primary" onclick="printReport()">🖨 Print</button>
+            <input type="month" id="report-month-filter"
+              style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;"
+              onchange="renderReport()">
+            <select id="report-year-filter"
+              style="display:none;padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;"
+              onchange="renderReport()">
+            </select>
+            <button class="btn btn-primary" onclick="exportReportPDF()" style="background:#1a2744;">📄 Export PDF</button>
+            <button class="btn btn-accent" onclick="exportReportExcel()">📊 Export Excel</button>
           </div>
         </div>
         <div id="report-content"></div>
+      </div>
+
+      <!-- DATA IMPORT PAGE -->
+      <div class="page" id="page-data-import">
+        <div id="import-page-content"></div>
       </div>
 
       <!-- OFFICE PAGES -->
@@ -1200,7 +1213,7 @@
           <div class="flex gap-10">
             <button class="btn btn-danger" onclick="clearAllAdminsFromFirebase()">Clear All Admins</button>
             <button class="btn btn-outline" onclick="repairAdminLoginAccess()">Fix Admin Login</button>
-            <button class="btn btn-accent" data-action="add_admin" onclick="openModal('modal-add-admin')">+ Add Admin</button>
+            <button class="btn btn-accent" data-action="add_admin" onclick="openAdminModal()">+ Add Admin</button>
           </div>
         </div>
         <div class="card">
@@ -1253,14 +1266,14 @@
             </div>
             <div class="form-group full">
               <label>Location / Note (optional)</label>
-              <input type="text" id="self-att-location" placeholder="e.g. DrivePro HQ, Koramangala">
+              <input type="text" id="self-att-location" placeholder="e.g. First Gear HQ, Koramangala">
             </div>
           </div>
 
           <div style="margin-top:20px;padding:14px;background:var(--surface2);border-radius:10px;border:1px solid var(--border);text-align:center;">
             <div style="font-size:20px;margin-bottom:6px;">🌐</div>
             <div style="font-size:13px;font-weight:500;">Auto-detecting Location...</div>
-            <div style="font-size:11px;color:var(--text2);margin-top:4px;">DrivePro HQ, Koramangala, Bengaluru</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:4px;">First Gear HQ, Koramangala, Bengaluru</div>
           </div>
 
           <div style="margin-top:20px;display:flex;gap:10px;">
@@ -1636,6 +1649,21 @@
       <!-- OTHER SERVICES PAGE -->
       <div class="page" id="page-other-services">
         <!-- Populated by renderOtherServices() -->
+      </div>
+
+      <!-- FORMS REGISTRY PAGE -->
+      <div class="page" id="page-forms-registry">
+        <!-- Populated by renderFormsRegistry('Form 5') -->
+      </div>
+
+      <!-- FORM 14 REGISTRY PAGE -->
+      <div class="page" id="page-form14-registry">
+        <!-- Populated by renderFormsRegistry('Form 14') -->
+      </div>
+
+      <!-- FORM 15 REGISTRY PAGE -->
+      <div class="page" id="page-form15-registry">
+        <!-- Populated by renderForm15Registry() -->
       </div>
 
       <!-- STUDENT TRACKING PAGE -->
@@ -2245,7 +2273,7 @@
 
 <script>
 // INSTRUCTOR MODULE
-// DrivePro instructor workflow code.
+// First Gear instructor workflow code.
 // ============================================================
       // NAVIGATION
       // ============================================================
@@ -3234,13 +3262,15 @@ function renderInstructorStudents() {
     const sid = s.firebaseId || s.id || '';
     const dlEligible = classes >= Math.max(1, total - 2) && classes < total;
     const feeLeft = (s.totalFee || 0) - (s.paid || 0);
+    const displayId = s.studentId || (sid ? 'FG-' + String(sid).slice(-6).toUpperCase() : '—');
 
     return '<div class="card" style="margin:0;">' +
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
         '<div class="avatar" style="width:46px;height:46px;font-size:16px;background:' + COLORS[colorIdx] + '22;color:' + COLORS[colorIdx] + ';">' + initials + '</div>' +
         '<div style="flex:1;min-width:0;">' +
           '<div style="font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (s.name || '') + '</div>' +
-          '<div style="font-size:12px;color:var(--text2);">' + (s.phone || '') + '</div>' +
+          '<div style="font-size:11px;color:var(--text2);margin-top:2px;"><span style="font-family:monospace;background:#f1f5f9;padding:2px 6px;border-radius:4px;">' + displayId + '</span></div>' +
+          '<div style="font-size:12px;color:var(--text2);margin-top:2px;">' + (s.phone || '') + '</div>' +
         '</div>' +
         '<span class="badge badge-green">Active</span>' +
       '</div>' +
@@ -3328,7 +3358,7 @@ async function updateClasses(firebaseId) {
 </script>
 <script>
 // OWNER/OFFICE MODULE
-// DrivePro owner and shared app bootstrap code.
+// First Gear owner and shared app bootstrap code.
 // Shared Firebase/auth/data setup stays here because the owner panel is the top-level app shell.
 // ============================================================
 // FIREBASE CONFIGURATION
@@ -3455,6 +3485,8 @@ function initFirebase() {
       firebase.initializeApp(firebaseConfig);
     }
     auth = firebase.auth();
+    // LOCAL persistence = user stays logged in across refresh/tab close
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(e){ console.warn('Persistence set failed:', e.message); });
     db   = firebase.firestore();
     try { analytics = firebase.analytics(); } catch(e) { console.warn('Analytics unavailable:', e.message); }
     try { messaging = firebase.messaging(); } catch(e) { console.warn('Messaging unavailable:', e.message); }
@@ -3475,10 +3507,69 @@ function initEmailJS() {
   } catch(e) { console.warn('EmailJS init failed:', e.message); }
 }
 
+// Flag: true while doLogin() is actively running — prevents onAuthStateChanged from firing twice
+let _manualLoginInProgress = false;
+
 document.addEventListener('DOMContentLoaded', function() {
-  initFirebase();
+  const ok = initFirebase();
   initEmailJS();
   registerFirebaseMessagingServiceWorker();
+  if (!ok || !auth) return;
+
+  // Auto-restore session on page refresh using Firebase LOCAL persistence
+  // This only runs when the user refreshes — NOT during normal login (guarded by _manualLoginInProgress)
+  auth.onAuthStateChanged(async function(user) {
+    // Skip if doLogin() is handling this sign-in event
+    if (_manualLoginInProgress) return;
+
+    // Skip if app is already visible (already logged in this session)
+    const appEl = document.getElementById('app');
+    if (appEl && appEl.style.display === 'block') return;
+
+    // No saved session
+    if (!user) return;
+
+    // Check we have a saved role — if not, this is a first-time login, let doLogin handle it
+    const savedRole = localStorage.getItem('fg_role');
+    const savedSchoolId = localStorage.getItem('fg_schoolId') || '';
+    if (!savedRole) return;
+
+    try {
+      FirebaseService.setUser(user);
+      currentUser = user;
+      currentRole = savedRole;
+
+      if (savedSchoolId) {
+        currentSchoolId = savedSchoolId;
+        FirebaseService.setSchool(savedSchoolId);
+      }
+
+      // Restore data and show app — skip verifyUserRole to avoid Firestore delay on refresh
+      if (currentRole === 'owner') {
+        await loadUserSchools();
+        if (currentSchoolId) {
+          await loadInitialData();
+          setupRealtimeListeners();
+          await continueToApp();
+        } else {
+          await continueToAppDirectly();
+        }
+      } else {
+        if (currentSchoolId) {
+          await loadInitialData();
+          setupRealtimeListeners();
+          await continueToApp();
+        } else {
+          await continueToAppDirectly();
+        }
+      }
+    } catch(e) {
+      console.warn('Session restore on refresh failed:', e.message);
+      // Do NOT sign out — just stay on login screen quietly
+      try { localStorage.removeItem('fg_role'); } catch(ex){}
+      try { localStorage.removeItem('fg_schoolId'); } catch(ex){}
+    }
+  });
 });
 
 async function registerFirebaseMessagingServiceWorker() {
@@ -3544,6 +3635,7 @@ async function registerUserNotificationToken() {
 
 async function handleUserLoggedIn(user, selectedRole, loginBtn, originalText) {
   if (!user) {
+    _manualLoginInProgress = false;
     throw new Error('Signed in user is not available.');
   }
 
@@ -3554,9 +3646,13 @@ async function handleUserLoggedIn(user, selectedRole, loginBtn, originalText) {
   const role = selectedRole || document.querySelector('.role-btn.active')?.id.replace('role-', '') || 'owner';
   const verifiedRole = await verifyUserRole(user.uid, role);
   if (!verifiedRole) {
+    _manualLoginInProgress = false;
     throw new Error('You are not authorized for this role');
   }
   currentRole = verifiedRole;
+
+  // Login verified — allow onAuthStateChanged to work normally from here
+  _manualLoginInProgress = false;
 
   if (currentRole === 'owner') {
     await loadUserSchools();
@@ -4529,29 +4625,37 @@ async function loadInitialData() {
     // Load data based on user role
     if (currentRole === 'owner') {
       // Owner loads all data — scoped to the currently selected school
-      const [students, transactions, dlTests, fuel, notifications] = await Promise.allSettled([
+      const [students, transactions, dlTests, fuel, notifications, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getTransactions(),
         FirebaseService.getDocuments(FirebaseService.dlTestsRef),
         FirebaseService.getDocuments(FirebaseService.fuelRef),
-        FirebaseService.getDocuments(FirebaseService.notificationsRef)
+        FirebaseService.getDocuments(FirebaseService.notificationsRef),
+        FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid)),
+        FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid))
       ]);
       if (students.status === 'fulfilled')      data.students      = mergeSchoolData(data.students,      students.value,      sid);
       if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
       if (dlTests.status === 'fulfilled')       data.dlTests       = mergeSchoolData(data.dlTests,       dlTests.value,       sid);
       if (fuel.status === 'fulfilled')          data.fuel          = mergeSchoolData(data.fuel,          fuel.value,          sid);
       if (notifications.status === 'fulfilled') data.notifications = mergeSchoolData(data.notifications, notifications.value, sid);
+      if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
+      if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
     } else if (currentRole === 'office') {
-      const [students, transactions, dlTests, notifications] = await Promise.allSettled([
+      const [students, transactions, dlTests, notifications, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getTransactions(),
         FirebaseService.getDocuments(FirebaseService.dlTestsRef),
-        FirebaseService.getDocuments(FirebaseService.notificationsRef)
+        FirebaseService.getDocuments(FirebaseService.notificationsRef),
+        FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid)),
+        FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid))
       ]);
       if (students.status === 'fulfilled')      data.students      = mergeSchoolData(data.students,      students.value,      sid);
       if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
       if (dlTests.status === 'fulfilled')       data.dlTests       = mergeSchoolData(data.dlTests,       dlTests.value,       sid);
       if (notifications.status === 'fulfilled') data.notifications = mergeSchoolData(data.notifications, notifications.value, sid);
+      if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
+      if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
     } else if (currentRole === 'instructor') {
       const [students, fuel] = await Promise.allSettled([
         FirebaseService.getStudents(),
@@ -4782,10 +4886,14 @@ const navConfig = {
       {id:'all-students',icon:'&#128101;',label:'All Students'},
       {id:'cashflow',icon:'&#128176;',label:'Cash Flow'},
       {id:'other-services',icon:'&#128222;',label:'Other Services'},
+      {id:'forms-registry',icon:'&#128203;',label:'Form 5 Registry'},
+      {id:'form14-registry',icon:'&#128202;',label:'Form 14 Registry'},
+      {id:'form15-registry',icon:'&#128210;',label:'Form 15 (Training Log)'},
       {id:'student-tracking',icon:'&#128205;',label:'Student Tracking'},
       {id:'dl-tests',icon:'&#128990;',label:'DL Tests'},
       {id:'notifications',icon:'&#128226;',label:'Notifications'},
       {id:'reports',icon:'&#128200;',label:'Reports'},
+      {id:'data-import',icon:'&#128228;',label:'Import Data'},
       {id:'admin-management',icon:'&#128100;',label:'Admin Management'},
       {id:'staff-management',icon:'&#128104;',label:'Staff Management'},
     ]},
@@ -4801,12 +4909,16 @@ const navConfig = {
       {id:'all-students',icon:'&#128101;',label:'All Students'},
       {id:'cashflow',icon:'&#128176;',label:'Cash Flow'},
       {id:'other-services',icon:'&#128222;',label:'Other Services'},
+      {id:'forms-registry',icon:'&#128203;',label:'Form 5 Registry'},
+      {id:'form14-registry',icon:'&#128202;',label:'Form 14 Registry'},
+      {id:'form15-registry',icon:'&#128210;',label:'Form 15 (Training Log)'},
       {id:'reports',icon:'&#128200;',label:'Reports'},
     ]},
     {section:'Operations', items:[
       {id:'add-student',icon:'&#43;',label:'Enroll Student'},
       {id:'dl-tests',icon:'&#128990;',label:'DL Tests'},
       {id:'notifications',icon:'&#128226;',label:'Notifications'},
+      {id:'data-import',icon:'&#128228;',label:'Import Data'},
       {id:'office-attendance',icon:'&#9989;',label:'My Attendance'},
       {id:'owner-attendance',icon:'&#128202;',label:'Staff Attendance'},
       {id:'staff-management',icon:'&#128104;',label:'Staff Management'},
@@ -4960,8 +5072,8 @@ async function verifyUserRole(userId, selectedRole) {
       if (hasRole) {
         console.log('Role found, validating subscription...');
         // Get user email for subscription validation
-        const user = await FirebaseService.getCurrentUser();
-        const userEmail = user ? user.email : null;
+        user = await FirebaseService.getCurrentUser();
+        userEmail = user ? user.email : null;
         
         if (userEmail) {
           // Validate subscription for staff/admin
@@ -4996,13 +5108,16 @@ function hasPageAccess(pageId) {
       'school-selector', 'dashboard', 'all-students', 'cashflow', 'reports',
       'admin-management', 'staff-management',
       'owner-fuel', 'vehicles', 'owner-attendance',
-      'other-services', 'student-tracking', 'dl-tests', 'notifications', 'add-student'
+      'other-services', 'student-tracking', 'dl-tests', 'notifications', 'add-student',
+      'forms-registry', 'form14-registry', 'form15-registry', 'form5-print', 'form14-print',
+      'data-import'
     ],
     office: [
       'dashboard', 'all-students', 'cashflow', 'reports',
       'dl-tests', 'notifications', 'office-attendance', 'owner-attendance',
       'class-schedule', 'instructor', 'staff-management',
-      'other-services', 'add-student'
+      'other-services', 'add-student', 'forms-registry', 'form14-registry', 'form15-registry',
+      'data-import'
     ],
     instructor: [
       'dashboard', 'my-students', 'other-students', 'class-schedule', 'attendance', 'petrol'
@@ -5392,62 +5507,53 @@ function selectRole(role) {
   });
 }
 async function doLogin() {
-  // Get current role from UI
+  // Get current role from UI — declared once, used throughout
   const activeRole = document.querySelector('.role-btn.active');
   const selectedRole = activeRole ? activeRole.id.replace('role-', '') : 'owner';
-  
-  // Show loading state
   const loginBtn = document.querySelector('.btn-login');
-  const originalText = loginBtn.textContent;
-  loginBtn.textContent = 'Signing In...';
-  loginBtn.disabled = true;
-  
+  const originalText = loginBtn ? loginBtn.textContent : 'Sign In →';
+
+  if (loginBtn) { loginBtn.textContent = 'Signing In...'; loginBtn.disabled = true; }
+
+  // Prevent onAuthStateChanged from also running while we handle login manually
+  _manualLoginInProgress = true;
+
   try {
-    
-    // Get credentials
-    const email = document.getElementById('login-user').value.trim();
-    const password = document.getElementById('login-pass').value;
-    
+    const email = (document.getElementById('login-user').value || '').trim();
+    const password = document.getElementById('login-pass').value || '';
+
     if (!email || !password) {
-      throw new Error('Please enter email and password');
+      throw new Error('Please enter your email and password.');
     }
-    
-    // Sign in with Firebase
+
     const user = await FirebaseService.signIn(email, password);
     await handleUserLoggedIn(user, selectedRole, loginBtn, originalText);
-    
+
   } catch (error) {
-    console.error('Login error:', error);
-    console.log('Error message:', error.message);
-    console.log('Error includes subscription keywords:', error.message && (error.message.includes('subscription') || error.message.includes('incomplete') || error.message.includes('setup')));
-    
-    let errorMessage = 'Login failed. Please try again.';
-    
-    if (error.code === 'auth/user-not-found') {
-      errorMessage = 'User not found. Please check your email.';
+    console.error('Login error:', error.code, error.message);
+    _manualLoginInProgress = false;
+
+    let msg = 'Login failed. Please try again.';
+    if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+      msg = 'Invalid email or password. Please check and try again.';
     } else if (error.code === 'auth/wrong-password') {
-      errorMessage = 'Incorrect password. Please try again.';
+      msg = 'Incorrect password. Please try again.';
     } else if (error.code === 'auth/invalid-email') {
-      errorMessage = 'Invalid email address.';
+      msg = 'Invalid email address format.';
     } else if (error.code === 'auth/too-many-requests') {
-      errorMessage = 'Too many failed attempts. Please try again later.';
+      msg = 'Too many failed attempts. Please wait and try again later.';
+    } else if (error.code === 'auth/network-request-failed') {
+      msg = 'Network error. Please check your internet connection.';
     } else if (error.message && (error.message.includes('subscription') || error.message.includes('incomplete') || error.message.includes('setup'))) {
-      // Show subscription renewal modal for subscription-related errors
-      const activeRole = document.querySelector('.role-btn.active');
-      const selectedRole = activeRole ? activeRole.id.replace('role-', '') : 'owner';
       showSubscriptionRenewal(error.message, selectedRole);
-      // Reset login button
-      const loginBtn = document.querySelector('.btn-login');
-      loginBtn.textContent = originalText;
-      loginBtn.disabled = false;
-      return; // Don't show generic error
+      if (loginBtn) { loginBtn.textContent = originalText; loginBtn.disabled = false; }
+      return;
     } else if (error.message) {
-      errorMessage = error.message;
-      alert(errorMessage);
+      msg = error.message;
     }
-    const loginBtn = document.querySelector('.btn-login');
-    loginBtn.textContent = originalText;
-    loginBtn.disabled = false;
+
+    alert(msg);
+    if (loginBtn) { loginBtn.textContent = originalText; loginBtn.disabled = false; }
   }
 }
 
@@ -5455,6 +5561,9 @@ async function doLogin() {
 async function continueToAppDirectly() {
   try {
     
+    // Persist session so refresh doesn't log out
+    try { localStorage.setItem('fg_role', currentRole); } catch(e){}
+    try { if(currentSchoolId) localStorage.setItem('fg_schoolId', currentSchoolId); } catch(e){}
     // Show app
     document.getElementById('splash').style.display = 'none';
     document.getElementById('app').style.display = 'block';
@@ -5492,6 +5601,9 @@ async function continueToApp() {
     await loadInitialData();
     setupRealtimeListeners();
     
+    // Persist session so refresh doesn't log out
+    try { localStorage.setItem('fg_role', currentRole); } catch(e){}
+    try { if(currentSchoolId) localStorage.setItem('fg_schoolId', currentSchoolId); } catch(e){}
     // Show app
     document.getElementById('splash').style.display = 'none';
     document.getElementById('app').style.display = 'block';
@@ -5569,38 +5681,45 @@ async function selectDashboardSchool() {
 async function doLogout() {
   try {
     await FirebaseService.signOut();
-    document.getElementById('splash').style.display = 'flex';
-    document.getElementById('app').style.display = 'none';
-    
-    // Reset SaaS state
-    currentSchoolId = null;
-    currentUser = null;
-    userSchools = [];
+  } catch(e) { console.warn('Sign-out error:', e.message); }
+
+  // Clear persisted session
+  try { localStorage.removeItem('fg_role'); } catch(e){}
+  try { localStorage.removeItem('fg_schoolId'); } catch(e){}
+
+  // Reset all state
+  currentSchoolId = null;
+  currentUser = null;
+  userSchools = [];
+  if(typeof FirebaseService !== 'undefined') {
     FirebaseService.setSchool(null);
     FirebaseService.setUser(null);
-    
-    // Clear forms
-    const _lu = document.getElementById('login-user'); if(_lu) _lu.value = '';
-    const _lp = document.getElementById('login-pass'); if(_lp) _lp.value = '';
-    const _sn = document.getElementById('school-name'); if(_sn) _sn.value = '';
-    const _se = document.getElementById('school-email'); if(_se) _se.value = '';
-    const _sp = document.getElementById('school-phone'); if(_sp) _sp.value = '';
-    
-    // Reset UI
-    const _ss = document.getElementById('school-section'); if(_ss) _ss.style.display = 'none';
-    const _nsf = document.getElementById('new-school-form'); if(_nsf) _nsf.style.display = 'none';
-    const _lf = document.getElementById('login-form'); if(_lf) _lf.style.display = 'none';
-    
-    // Reset login button
-    const loginBtn = document.querySelector('.btn-login');
-    loginBtn.textContent = 'Sign In →';
-    loginBtn.onclick = doLogin;
-    
-  } catch (error) {
-    console.error('Logout error:', error);
-    // Still show splash screen even if logout fails
-    document.getElementById('splash').style.display = 'flex';
-    document.getElementById('app').style.display = 'none';
+  }
+
+  // Reset app UI
+  document.getElementById('app').style.display = 'none';
+
+  // Reset login form fields
+  const _lu = document.getElementById('login-user'); if(_lu) _lu.value = '';
+  const _lp = document.getElementById('login-pass'); if(_lp) _lp.value = '';
+  const _sn = document.getElementById('school-name'); if(_sn) _sn.value = '';
+  const _se = document.getElementById('school-email'); if(_se) _se.value = '';
+  const _sp = document.getElementById('school-phone'); if(_sp) _sp.value = '';
+  const _ss = document.getElementById('school-section'); if(_ss) _ss.style.display = 'none';
+  const _nsf = document.getElementById('new-school-form'); if(_nsf) _nsf.style.display = 'none';
+  const _lf = document.getElementById('login-form'); if(_lf) _lf.style.display = 'none';
+
+  // Reset login button text
+  const loginBtn = document.querySelector('.btn-login');
+  if(loginBtn) { loginBtn.textContent = 'Sign In →'; loginBtn.onclick = doLogin; loginBtn.disabled = false; }
+
+  // Show login screen immediately
+  const splash = document.getElementById('splash');
+  if(splash) {
+    splash.style.display = 'flex';
+    // Make sure login form is visible not a loading spinner
+    const loginCard = splash.querySelector('.splash-card');
+    if(loginCard) loginCard.style.opacity = '1';
   }
 }
 
@@ -5691,7 +5810,7 @@ function filterDataByRole(dataType, items) {
       if (currentRole === 'owner' || currentRole === 'office') {
         return schoolFiltered;
       } else if (currentRole === 'instructor') {
-        const instructorName = getCurrentInstructorName();
+        instructorName = getCurrentInstructorName();
         const myStudents = (data.students || []).filter(student =>
           student.schoolId === currentSchoolId &&
           (student.instructorEmail === currentUser.email ||
@@ -5773,7 +5892,7 @@ function renderAllData() {
   // Owner-only renders
   if (currentRole === 'owner') {
     renderCashflow();
-    renderReport();
+    (function(){ var mf=document.getElementById('report-month-filter'); if(mf&&!mf.value) mf.value=new Date().toISOString().slice(0,7); onReportPeriodChange(); })();
     renderDLTests();
     renderAdminsTable();
     renderOwnerFuelDashboard();
@@ -5785,7 +5904,7 @@ function renderAllData() {
   // Office renders
   if (currentRole === 'office') {
     renderCashflow();
-    renderReport();
+    (function(){ var mf=document.getElementById('report-month-filter'); if(mf&&!mf.value) mf.value=new Date().toISOString().slice(0,7); onReportPeriodChange(); })();
     renderDLTests();
     loadOtherServices();
   }
@@ -5814,18 +5933,26 @@ function refreshPage(id) {
   else if(id==='owner-attendance') renderOwnerAttendance();
   else if(id==='office-attendance') { renderOfficeAttHistory(); const d=document.getElementById('office-att-date'); if(d) d.textContent='Today — '+new Date().toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long'}); }
   else if(id==='notifications') renderNotifications();
-  else if(id==='reports') renderReport();
+  else if(id==='reports') {
+    const mf = document.getElementById('report-month-filter');
+    if (mf && !mf.value) mf.value = new Date().toISOString().slice(0,7);
+    onReportPeriodChange();
+  }
   else if(id==='my-students') renderInstructorStudents();
   else if(id==='other-students') renderOtherStudentsPage();
   else if(id==='admin-management') renderAdminsTable();
   else if(id==='staff-management') renderStaffTable();
   else if(id==='other-services') renderOtherServices();
+  else if(id==='forms-registry') renderFormsRegistry('Form 5');
+  else if(id==='form14-registry') renderFormsRegistry('Form 14');
+  else if(id==='form15-registry') renderForm15Registry();
   else if(id==='student-tracking') {
     const _stp = document.getElementById('page-student-tracking');
     if (_stp) _stp.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2);"><div style="font-size:32px;margin-bottom:12px;">&#x23F3;</div>Loading tracking data...</div>';
     renderStudentTracking();
   }
   else if(id==='add-student') { /* static form page, no render needed */ }
+  else if(id==='data-import') renderImportPage();
 }
 
 // ============================================================
@@ -5966,11 +6093,14 @@ async function renderOverallStudents() {
   html += '</tbody></table></div>';
 
   // All students table
-  html += '<div class="card"><div class="card-title">All Students</div><table class="data-table"><thead><tr><th>Name</th><th>School</th><th>Phone</th><th>Vehicle</th><th>Instructor</th><th>Status</th><th>Classes</th><th>Fee</th><th>Paid</th><th>Balance</th></tr></thead><tbody>';
+  html += '<div class="card"><div class="card-title">All Students</div><table class="data-table"><thead><tr><th>Student ID</th><th>Name</th><th>School</th><th>Phone</th><th>Vehicle</th><th>Instructor</th><th>Status</th><th>Classes</th><th>Fee</th><th>Paid</th><th>Balance</th></tr></thead><tbody>';
   allStudents.slice(0,50).forEach(s => {
     const balance = (s.totalFee||0)-(s.paid||0);
     const statusCls = s.status==='Active'?'badge-green':s.status==='Completed'?'badge-purple':'badge-amber';
+    const sid = s.firebaseId || s.id || '';
+    const displayId = s.studentId || (sid ? 'FG-' + String(sid).slice(-6).toUpperCase() : '—');
     html += `<tr>
+      <td><span class="badge badge-gray" style="font-family:monospace;font-size:11px;letter-spacing:0.03em;">${displayId}</span></td>
       <td><strong>${s.name}</strong><div style="font-size:11px;color:var(--text2)">${s.phone}</div></td>
       <td><span class="badge badge-gray">${s.schoolName}</span></td>
       <td>${s.phone}</td>
@@ -6186,6 +6316,7 @@ async function renderSchoolSelector() {
       schoolsGrid.innerHTML = userSchools.map(school => `
         <div class="school-card" style="border:2px solid var(--border); border-radius:12px; padding:20px; transition:all 0.2s; position: relative;">
           <button onclick="deleteSchool('${school.id}', '${school.name}')" style="position: absolute; top:10px; right:10px; background:var(--danger); color:white; border:none; border-radius:50%; width:30px; height:30px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; z-index:10;" title="Delete School">×</button>
+          <button onclick="openEditSchoolModal('${school.id}')" style="position: absolute; top:10px; right:50px; background:var(--accent2); color:white; border:none; border-radius:20px; padding:4px 12px; cursor:pointer; font-size:12px; z-index:10;" title="Edit School Details">⚙️ Edit</button>
           <div onclick="selectSchoolForView('${school.id}', '${school.name}')" style="cursor:pointer;">
             <div style="display:flex;align-items:center;gap:15px;margin-bottom:15px;">
               <div class="avatar" style="background:var(--accent);color:white;width:50px;height:50px;font-size:20px;border-radius:12px;">${school.name.charAt(0)}</div>
@@ -6310,7 +6441,7 @@ async function sendPasswordReset() {
         alert('FIREBASE EMAIL CONFIGURATION REQUIRED:\n\n1. Go to Firebase Console → Authentication → Templates\n2. Click "Get Started" for email/password authentication\n3. Configure password reset email template\n4. Verify sender email address\n5. Save and test\n\nAlternatively, contact your system administrator.');
       }, 1000);
     } else {
-      addNotification(`Password reset service unavailable. Please contact support at support@drivepro.com`, 'error');
+      addNotification(`Password reset service unavailable. Please contact support at support@firstgear.com`, 'error');
     }
   }
 }
@@ -6423,6 +6554,110 @@ function closeAdminInviteSuccessModal() {
 }
 
 // Delete school function
+// ── EDIT SCHOOL DETAILS (licenseNo, principal, signature) ──────────────
+function openEditSchoolModal(schoolId) {
+  event.stopPropagation();
+  const school = (userSchools||[]).find(s=>s.id===schoolId) || {};
+  const old = document.getElementById('modal-edit-school');
+  if (old) old.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-edit-school';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML = `
+  <div class="modal" style="max-width:520px;width:96vw;">
+    <div class="modal-header">
+      <h3>⚙️ Edit School Details</h3>
+      <button class="modal-close" onclick="document.getElementById('modal-edit-school').remove()">✕</button>
+    </div>
+    <div class="form-grid" style="gap:14px;">
+      <div class="form-group full"><label>School Name</label>
+        <input type="text" id="esc-name" value="${school.name||''}" placeholder="School name">
+      </div>
+      <div class="form-group full"><label>Address</label>
+        <textarea id="esc-address" style="min-height:60px;">${school.address||''}</textarea>
+      </div>
+      <div class="form-group"><label>Phone</label>
+        <input type="tel" id="esc-phone" value="${school.phone||''}">
+      </div>
+      <div class="form-group"><label>Licence No. (for forms)</label>
+        <input type="text" id="esc-license" value="${school.licenseNo||school.license||''}" placeholder="e.g. 1834">
+      </div>
+      <div class="form-group"><label>Principal / Owner Name (for forms)</label>
+        <input type="text" id="esc-principal" value="${school.principal||school.ownerName||''}" placeholder="Full name">
+      </div>
+      <div class="form-group"><label>Website</label>
+        <input type="text" id="esc-website" value="${school.website||''}" placeholder="www.example.com">
+      </div>
+      <div class="form-group full">
+        <label>Principal Signature / Stamp Image</label>
+        <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">Upload a PNG/JPG of the signature or stamp — it will appear on printed Form 5, 14, and 15.</p>
+        ${school.signatureUrl ? `<img src="${school.signatureUrl}" style="max-height:60px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:block;">` : ''}
+        <input type="file" id="esc-signature-file" accept="image/*" style="font-size:13px;">
+        ${school.signatureUrl ? `<button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="document.getElementById('esc-sig-clear').value='1';this.textContent='✓ Will be cleared on save';">🗑 Remove Signature</button>` : ''}
+        <input type="hidden" id="esc-sig-clear" value="">
+      </div>
+    </div>
+    <div style="margin-top:20px;display:flex;gap:10px;">
+      <button class="btn btn-accent" onclick="saveSchoolDetails('${schoolId}')">💾 Save Details</button>
+      <button class="btn btn-outline" onclick="document.getElementById('modal-edit-school').remove()">Cancel</button>
+    </div>
+  </div>`;
+  modal.addEventListener('click', e=>{ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function saveSchoolDetails(schoolId) {
+  const name      = document.getElementById('esc-name')?.value.trim();
+  const address   = document.getElementById('esc-address')?.value.trim();
+  const phone     = document.getElementById('esc-phone')?.value.trim();
+  const licenseNo = document.getElementById('esc-license')?.value.trim();
+  const principal = document.getElementById('esc-principal')?.value.trim();
+  const website   = document.getElementById('esc-website')?.value.trim();
+  const clearSig  = document.getElementById('esc-sig-clear')?.value === '1';
+  const fileInput = document.getElementById('esc-signature-file');
+  const file      = fileInput?.files?.[0];
+
+  if (!name) { alert('School name is required'); return; }
+
+  const btn = document.querySelector('#modal-edit-school .btn-accent');
+  if (btn) { btn.textContent = '⏳ Saving...'; btn.disabled = true; }
+
+  try {
+    const updates = { name, address, phone, licenseNo, license: licenseNo, principal, website, updatedAt: new Date().toISOString() };
+
+    // Handle signature image
+    if (clearSig) {
+      updates.signatureUrl = '';
+      updates.stampUrl = '';
+    } else if (file) {
+      // Convert to base64 data URL (stored in Firestore — fine for small images)
+      const reader = new FileReader();
+      const b64 = await new Promise((res, rej) => {
+        reader.onload = e => res(e.target.result);
+        reader.onerror = () => rej(new Error('File read error'));
+        reader.readAsDataURL(file);
+      });
+      updates.signatureUrl = b64;
+      updates.stampUrl = b64;
+    }
+
+    await db.collection('schools').doc(schoolId).update(updates);
+
+    // Update local cache
+    const idx = (userSchools||[]).findIndex(s=>s.id===schoolId);
+    if (idx>=0) userSchools[idx] = Object.assign({}, userSchools[idx], updates);
+
+    document.getElementById('modal-edit-school')?.remove();
+    addNotification('School details updated ✅', 'success');
+    renderSchoolSelector();
+  } catch(e) {
+    console.error('Save school error:', e);
+    alert('Error saving: ' + e.message);
+    if (btn) { btn.textContent = '💾 Save Details'; btn.disabled = false; }
+  }
+}
+
 async function deleteSchool(schoolId, schoolName) {
   // Prevent event bubbling to avoid triggering school selection
   event.stopPropagation();
@@ -6905,7 +7140,7 @@ function renderDashboard() {
     {label:'DL Tests Scheduled',value:pendingDLTests,sub:'Upcoming tests', color:'', class:''},
     {label:'Instructors',value:totalInstructors,sub:'Total instructors', color:'', class:''}
   ];
-  const statsGrid = document.getElementById('dashboard-stats-grid');
+  statsGrid = document.getElementById('dashboard-stats-grid');
   if(statsGrid) statsGrid.innerHTML = stats.map(s=>`
     <div class="stat-card ${s.class}">
       <div class="sc-label">${s.label}</div>
@@ -6918,7 +7153,7 @@ function renderDashboard() {
   setTimeout(renderIncomeAnalytics, 100);
 
   // Recent transactions for this school
-  const recent = document.getElementById('recent-tx');
+  recent = document.getElementById('recent-tx');
   if(recent) {
     if (schoolTransactions.length === 0) {
       recent.innerHTML = '<tr><td colspan="3" style="text-align:center;padding:40px;color:var(--text2);">No transactions yet for ' + schoolName + '</td></tr>';
@@ -6951,11 +7186,29 @@ function renderStudentsTable(filter='', statusFilter='') {
   
   // Get role-filtered data
   let rows = getFilteredData('students');
-  if(filter) rows = rows.filter(s => s.name && (s.name.toLowerCase().includes(filter.toLowerCase()) || (s.phone||'').includes(filter)));
-  if(statusFilter) rows = rows.filter(s => s.status===statusFilter);
+  if(filter) {
+    const q = filter.toLowerCase().trim();
+    rows = rows.filter(function(s) {
+      const sid = s.firebaseId || s.id || '';
+      const generatedId = s.studentId || (sid ? 'fg-' + String(sid).slice(-6).toLowerCase() : '');
+      return (
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.phone || '').includes(q) ||
+        (s.email || '').toLowerCase().includes(q) ||
+        (s.studentId || '').toLowerCase().includes(q) ||
+        generatedId.includes(q) ||
+        (s.instructor || '').toLowerCase().includes(q) ||
+        (s.vehicle || '').toLowerCase().includes(q) ||
+        (s.aadhaar || '').includes(q) ||
+        (s.address || '').toLowerCase().includes(q)
+      );
+    });
+  }
+  if(statusFilter) rows = rows.filter(function(s) { return s.status===statusFilter; });
 
   if (rows.length === 0) {
-    tb.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2);"><div style="font-size:40px;margin-bottom:12px;">&#x1F393;</div><div style="font-size:15px;">No students found' + (filter||statusFilter ? ' matching your filter' : '') + '</div><div style="font-size:13px;margin-top:6px;">Enroll a student using the + button above.</div></div>';
+    const hint = filter ? (' matching <strong>"' + filter + '"</strong>') : (statusFilter ? ' with status <strong>' + statusFilter + '</strong>' : '');
+    tb.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2);"><div style="font-size:40px;margin-bottom:12px;">&#x1F50D;</div><div style="font-size:15px;">No students found' + hint + '</div><div style="font-size:13px;margin-top:6px;color:var(--text3);">Try searching by name, student ID, phone, email or instructor.</div></div>';
     return;
   }
 
@@ -6971,8 +7224,10 @@ function renderStudentsTable(filter='', statusFilter='') {
     const initials = name.split(' ').map(function(x){return x[0]||'';}).join('');
     const colorIdx = (name.charCodeAt(0)||0) % COLORS.length;
     const pct = Math.min(100, Math.round(classes/total*100));
-    const sid = s.firebaseId || s.id || '';
+    sid = s.firebaseId || s.id || '';
+    const displayId = s.studentId || (sid ? 'FG-' + String(sid).slice(-6).toUpperCase() : '—');
     return '<tr>' +
+      '<td><span class="badge badge-gray" style="font-family:monospace;font-size:11px;letter-spacing:0.03em;">' + displayId + '</span></td>' +
       '<td><div style="display:flex;align-items:center;gap:10px;">' +
         '<div class="avatar" style="background:' + COLORS[colorIdx] + '22;color:' + COLORS[colorIdx] + ';">' + initials + '</div>' +
         '<div><div style="font-weight:500">' + name + '</div><div style="font-size:11px;color:var(--text2)">' + phone + '</div></div>' +
@@ -7892,68 +8147,225 @@ async function addTransaction() {
 // ============================================================
 // REPORTS
 // ============================================================
+// ──────────────────────────────────────────────────────────
+//  Helpers: toggle report filter controls
+// ──────────────────────────────────────────────────────────
+function onReportPeriodChange() {
+  const period = document.getElementById('report-period')?.value || 'monthly';
+  const mf = document.getElementById('report-month-filter');
+  const yf = document.getElementById('report-year-filter');
+  if (mf) mf.style.display = period === 'monthly' ? '' : 'none';
+  if (yf) yf.style.display = period === 'yearly'  ? '' : 'none';
+  renderReport();
+}
+
+function _populateReportYearFilter() {
+  const yf = document.getElementById('report-year-filter');
+  if (!yf) return;
+  const schoolTx = (data.transactions||[]).filter(t => !currentSchoolId || t.schoolId === currentSchoolId);
+  const yearsSet = new Set();
+  schoolTx.forEach(function(t){ if (t.date) yearsSet.add(t.date.slice(0,4)); });
+  const thisYear = new Date().getFullYear();
+  // Always include current year and past 5 years
+  for (let y = thisYear; y >= thisYear - 5; y--) yearsSet.add(String(y));
+  const sorted = Array.from(yearsSet).sort(function(a,b){ return b-a; });
+  const cur = yf.value || String(thisYear);
+  yf.innerHTML = sorted.map(function(y){
+    return '<option value="' + y + '"' + (y===cur?' selected':'') + '>' + y + '</option>';
+  }).join('');
+}
+
+// ──────────────────────────────────────────────────────────
+//  Main renderReport — Monthly & Yearly, fully data-driven
+// ──────────────────────────────────────────────────────────
 function renderReport() {
   const period = document.getElementById('report-period')?.value || 'monthly';
   const rc = document.getElementById('report-content');
-  if(!rc) return;
+  if (!rc) return;
 
-  // Scope to current school
-  const schoolStudents = (data.students||[]).filter(s => !currentSchoolId || s.schoolId === currentSchoolId);
-  const schoolTx = (data.transactions||[]).filter(t => !currentSchoolId || t.schoolId === currentSchoolId);
+  const schoolTx = (data.transactions||[]).filter(function(t){
+    return !currentSchoolId || t.schoolId === currentSchoolId;
+  });
 
-  if(period==='monthly') {
-    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-    const monthData = [];
-    const totalIncome = monthData.reduce((s,m)=>s+m.income,0);
-    const totalExpense = monthData.reduce((s,m)=>s+m.expense,0);
+  const schoolName = (function(){
+    var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
+    return (s && s.name) ? s.name : (data.school && data.school.name ? data.school.name : 'First Gear Driving School');
+  })();
 
-    rc.innerHTML = `<div class="report-section">
-      <div class="report-header">
-        <h3>Monthly Financial Report — 2025</h3>
-        <p>DrivePro Driving School | Generated ${new Date().toLocaleDateString('en-IN')}</p>
-      </div>
-      <div class="report-body">
-        ${monthData.map((m,i) => `
-          <div class="report-row">
-            <span>${months[i]}</span>
-            <div style="display:flex;gap:20px;font-size:13px;">
-              <span style="color:var(--success);">Income: ₹${m.income.toLocaleString()}</span>
-              <span style="color:var(--danger);">Expense: ₹${m.expense.toLocaleString()}</span>
-              <span style="color:var(--accent2);font-weight:600;">Profit: ₹${(m.income-m.expense).toLocaleString()}</span>
-            </div>
-          </div>
-        `).join('')}
-        <div class="report-total">
-          <span>Annual Total</span>
-          <div style="display:flex;gap:20px;">
-            <span style="color:var(--success);">₹${totalIncome.toLocaleString()}</span>
-            <span style="color:var(--danger);">₹${totalExpense.toLocaleString()}</span>
-            <span style="color:var(--accent2);">₹${(totalIncome-totalExpense).toLocaleString()}</span>
-          </div>
-        </div>
-      </div>
-    </div>`;
-  } else {
-    const years = [];
-    rc.innerHTML = `<div class="report-section">
-      <div class="report-header">
-        <h3>Yearly Financial Report</h3>
-        <p>DrivePro Driving School | All Years</p>
-      </div>
-      <div class="report-body">
-        ${years.map(y => `
-          <div class="report-row">
-            <span style="font-weight:600;">${y.year}</span>
-            <div style="display:flex;gap:20px;font-size:13px;">
-              <span style="color:var(--success);">Income: ₹${y.income.toLocaleString()}</span>
-              <span style="color:var(--danger);">Expense: ₹${y.expense.toLocaleString()}</span>
-              <span style="color:var(--accent2);font-weight:600;">Profit: ₹${(y.income-y.expense).toLocaleString()}</span>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </div>`;
+  const monthNames = ['January','February','March','April','May','June',
+                      'July','August','September','October','November','December'];
+  const generated = new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'});
+
+  // ── MONTHLY VIEW ──────────────────────────────────────────
+  if (period === 'monthly') {
+    // Default = current month
+    const mf = document.getElementById('report-month-filter');
+    const selMonth = (mf && mf.value) ? mf.value : new Date().toISOString().slice(0,7);
+    const [selYear, selMon] = selMonth.split('-').map(Number);
+
+    // All transactions for the selected month
+    const monthTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selMonth); });
+    const income  = monthTx.filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    const expense = monthTx.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    const profit  = income - expense;
+
+    // Group by category for breakdown
+    const catMap = {};
+    monthTx.forEach(function(t){
+      var cat = t.category || (t.type==='income' ? 'Income' : 'Expense');
+      if (!catMap[cat]) catMap[cat] = {type:t.type, total:0, count:0};
+      catMap[cat].total += (t.amount||0);
+      catMap[cat].count++;
+    });
+
+    // Transaction rows (latest 20)
+    const recent = monthTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); }).slice(0,20);
+
+    const catRows = Object.keys(catMap).map(function(cat){
+      var c = catMap[cat];
+      var color = c.type==='income' ? 'var(--success)' : 'var(--danger)';
+      return '<div class="report-row">' +
+        '<span>' + cat + ' <span style="font-size:11px;color:var(--text3);">(' + c.count + ' entries)</span></span>' +
+        '<span style="color:' + color + ';font-weight:600;">₹' + c.total.toLocaleString() + '</span>' +
+      '</div>';
+    }).join('') || '<div style="color:var(--text3);padding:12px 0;text-align:center;">No transactions for this month.</div>';
+
+    const txRows = recent.length === 0 ? '' :
+      '<table class="data-table" style="margin-top:8px;">' +
+        '<thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th style="text-align:right">Amount</th></tr></thead>' +
+        '<tbody>' +
+        recent.map(function(t){
+          var color = t.type==='income' ? 'var(--success)' : 'var(--danger)';
+          return '<tr>' +
+            '<td style="font-size:12px;">' + (t.date||'—') + '</td>' +
+            '<td>' + (t.description||t.note||t.category||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (t.category||'—') + '</td>' +
+            '<td><span class="badge ' + (t.type==='income'?'badge-green':'badge-red') + '">' + (t.type||'—') + '</span></td>' +
+            '<td style="text-align:right;color:' + color + ';font-weight:600;">₹' + (t.amount||0).toLocaleString() + '</td>' +
+          '</tr>';
+        }).join('') +
+        '</tbody></table>';
+
+    rc.innerHTML =
+      '<div class="report-section">' +
+        '<div class="report-header">' +
+          '<h3>Monthly Report — ' + monthNames[selMon-1] + ' ' + selYear + '</h3>' +
+          '<p>' + schoolName + ' &nbsp;|&nbsp; Generated ' + generated + '</p>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin:18px 0;">' +
+          '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;">' +
+            '<div style="font-size:11px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:.05em;">Total Income</div>' +
+            '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:var(--success);margin-top:6px;">₹' + income.toLocaleString() + '</div>' +
+          '</div>' +
+          '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px 18px;">' +
+            '<div style="font-size:11px;font-weight:600;color:#b91c1c;text-transform:uppercase;letter-spacing:.05em;">Total Expense</div>' +
+            '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:var(--danger);margin-top:6px;">₹' + expense.toLocaleString() + '</div>' +
+          '</div>' +
+          '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px 18px;">' +
+            '<div style="font-size:11px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;">Net Profit</div>' +
+            '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:' + (profit>=0?'var(--accent2)':'var(--danger)') + ';margin-top:6px;">₹' + profit.toLocaleString() + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="report-body">' +
+          '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Category Breakdown</div>' +
+          catRows +
+        '</div>' +
+        (txRows ? '<div class="report-body" style="margin-top:18px;"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Recent Transactions (latest 20)</div>' + txRows + '</div>' : '') +
+      '</div>';
+    return;
   }
+
+  // ── YEARLY VIEW ───────────────────────────────────────────
+  _populateReportYearFilter();
+  const yf = document.getElementById('report-year-filter');
+  const selYear = (yf && yf.value) ? yf.value : String(new Date().getFullYear());
+
+  // All 12 months for selected year
+  const monthNames2 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var totalIncome = 0, totalExpense = 0;
+
+  const monthData = monthNames2.map(function(mon, idx){
+    var mm = String(idx+1).padStart(2,'0');
+    var prefix = selYear + '-' + mm;
+    var txs = schoolTx.filter(function(t){ return (t.date||'').startsWith(prefix); });
+    var inc = txs.filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    var exp = txs.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    totalIncome  += inc;
+    totalExpense += exp;
+    return { mon: monthNames[idx], shortMon: mon, income: inc, expense: exp, profit: inc-exp };
+  });
+
+  // Also compute available years for multi-year summary
+  const yearsSet = new Set();
+  schoolTx.forEach(function(t){ if(t.date) yearsSet.add(t.date.slice(0,4)); });
+  const thisYear = new Date().getFullYear();
+  for (var y = thisYear; y >= thisYear-5; y--) yearsSet.add(String(y));
+  const allYears = Array.from(yearsSet).sort(function(a,b){ return b-a; });
+
+  const yearSummaryRows = allYears.map(function(yr){
+    var txs = schoolTx.filter(function(t){ return (t.date||'').startsWith(yr); });
+    var inc = txs.filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    var exp = txs.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    var pf  = inc - exp;
+    var isSelected = yr === selYear;
+    return '<tr style="' + (isSelected ? 'background:#eff6ff;' : '') + '">' +
+      '<td style="font-weight:' + (isSelected?'700':'400') + ';">' + yr + (isSelected?' ★':'') + '</td>' +
+      '<td style="color:var(--success);font-weight:600;">₹' + inc.toLocaleString() + '</td>' +
+      '<td style="color:var(--danger);font-weight:600;">₹' + exp.toLocaleString() + '</td>' +
+      '<td style="color:' + (pf>=0?'var(--accent2)':'var(--danger)') + ';font-weight:700;">₹' + pf.toLocaleString() + '</td>' +
+    '</tr>';
+  }).join('');
+
+  const monthRows = monthData.map(function(m){
+    var hasData = m.income > 0 || m.expense > 0;
+    return '<div class="report-row" style="' + (!hasData?'opacity:.45':'') + '">' +
+      '<span style="min-width:100px;">' + m.mon + '</span>' +
+      '<div style="display:flex;gap:20px;font-size:13px;flex-wrap:wrap;">' +
+        '<span style="color:var(--success);">Income: ₹' + m.income.toLocaleString() + '</span>' +
+        '<span style="color:var(--danger);">Expense: ₹' + m.expense.toLocaleString() + '</span>' +
+        '<span style="color:' + (m.profit>=0?'var(--accent2)':'var(--danger)') + ';font-weight:600;">Profit: ₹' + m.profit.toLocaleString() + '</span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  rc.innerHTML =
+    '<div class="report-section">' +
+      '<div class="report-header">' +
+        '<h3>Yearly Report — ' + selYear + '</h3>' +
+        '<p>' + schoolName + ' &nbsp;|&nbsp; Generated ' + generated + '</p>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin:18px 0;">' +
+        '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;">' +
+          '<div style="font-size:11px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:.05em;">Total Income ' + selYear + '</div>' +
+          '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:var(--success);margin-top:6px;">₹' + totalIncome.toLocaleString() + '</div>' +
+        '</div>' +
+        '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px 18px;">' +
+          '<div style="font-size:11px;font-weight:600;color:#b91c1c;text-transform:uppercase;letter-spacing:.05em;">Total Expense ' + selYear + '</div>' +
+          '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:var(--danger);margin-top:6px;">₹' + totalExpense.toLocaleString() + '</div>' +
+        '</div>' +
+        '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px 18px;">' +
+          '<div style="font-size:11px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;">Net Profit ' + selYear + '</div>' +
+          '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:' + ((totalIncome-totalExpense)>=0?'var(--accent2)':'var(--danger)') + ';margin-top:6px;">₹' + (totalIncome-totalExpense).toLocaleString() + '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="report-body">' +
+        '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Month-by-Month Breakdown — ' + selYear + '</div>' +
+        monthRows +
+        '<div class="report-total">' +
+          '<span>Annual Total</span>' +
+          '<div style="display:flex;gap:20px;">' +
+            '<span style="color:var(--success);">₹' + totalIncome.toLocaleString() + '</span>' +
+            '<span style="color:var(--danger);">₹' + totalExpense.toLocaleString() + '</span>' +
+            '<span style="color:var(--accent2);font-weight:700;">₹' + (totalIncome-totalExpense).toLocaleString() + '</span>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="report-body" style="margin-top:18px;">' +
+        '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Multi-Year Summary</div>' +
+        '<table class="data-table"><thead><tr><th>Year</th><th>Income</th><th>Expense</th><th>Net Profit</th></tr></thead>' +
+        '<tbody>' + yearSummaryRows + '</tbody></table>' +
+      '</div>' +
+    '</div>';
 }
 
 function switchCFChart(mode, el) {
@@ -7961,8 +8373,199 @@ function switchCFChart(mode, el) {
   el.classList.add('active');
 }
 
-function printReport() {
-  window.print();
+// ─────────────────────────────────────────────
+//  Export Report as PDF (print dialog)
+// ─────────────────────────────────────────────
+function exportReportPDF() {
+  const period = document.getElementById('report-period')?.value || 'monthly';
+  const mf = document.getElementById('report-month-filter');
+  const yf = document.getElementById('report-year-filter');
+  const label = period === 'monthly'
+    ? (mf && mf.value ? mf.value : new Date().toISOString().slice(0,7))
+    : (yf && yf.value ? yf.value : new Date().getFullYear());
+
+  const schoolName = (function(){
+    var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
+    return (s && s.name) ? s.name : 'First Gear Driving School';
+  })();
+
+  const rcEl = document.getElementById('report-content');
+  if (!rcEl || !rcEl.innerHTML.trim()) { alert('No report data to export.'); return; }
+
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <title>${schoolName} — Report ${label}</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: Arial, sans-serif; font-size: 12px; color: #1e293b; padding: 24px; }
+      h1 { font-size: 18px; margin-bottom: 4px; color: #1a2744; }
+      .sub { font-size: 11px; color: #64748b; margin-bottom: 18px; }
+      .summary-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 18px; }
+      .box { border-radius: 8px; padding: 12px 14px; border: 1px solid #e2e8f0; }
+      .box .lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 4px; }
+      .box .val { font-size: 20px; font-weight: 700; }
+      .income .val { color: #16a34a; } .expense .val { color: #dc2626; } .profit .val { color: #3b82f6; }
+      table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+      th { background: #f0f3fa; padding: 7px 10px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; border-bottom: 1px solid #e2e8f0; }
+      td { padding: 7px 10px; border-bottom: 1px solid #f1f5f9; }
+      tr:last-child td { border-bottom: none; }
+      .report-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 12px; }
+      .report-total { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-weight: 700; font-size: 13px; border-top: 2px solid #1a2744; margin-top: 6px; }
+      .section-title { font-size: 13px; font-weight: 700; color: #1a2744; margin: 16px 0 8px; }
+      .badge { display: inline-block; padding: 2px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+      .badge-green { background: #dcfce7; color: #15803d; }
+      .badge-red   { background: #fee2e2; color: #b91c1c; }
+      @media print {
+        @page { margin: 12mm; size: A4; }
+        body { padding: 0; }
+      }
+    </style>
+  </head><body>
+    <h1>${schoolName}</h1>
+    <div class="sub">Financial Report — ${label} &nbsp;|&nbsp; Generated ${new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</div>
+    ${rcEl.innerHTML}
+    <script>window.onload=function(){ window.print(); }<\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+// ─────────────────────────────────────────────
+//  Export Report as Excel (.xlsx via CSV blob)
+// ─────────────────────────────────────────────
+function exportReportExcel() {
+  const period = document.getElementById('report-period')?.value || 'monthly';
+  const mf = document.getElementById('report-month-filter');
+  const yf = document.getElementById('report-year-filter');
+
+  const schoolTx = (data.transactions||[]).filter(function(t){
+    return !currentSchoolId || t.schoolId === currentSchoolId;
+  });
+
+  const schoolName = (function(){
+    var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
+    return (s && s.name) ? s.name : 'First Gear Driving School';
+  })();
+
+  const monthNames = ['January','February','March','April','May','June',
+                      'July','August','September','October','November','December'];
+
+  var rows = [];
+  var filename = 'report';
+
+  if (period === 'monthly') {
+    const selMonth = (mf && mf.value) ? mf.value : new Date().toISOString().slice(0,7);
+    const [selYear, selMon] = selMonth.split('-').map(Number);
+    filename = 'Report_' + monthNames[selMon-1] + '_' + selYear;
+
+    const monthTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selMonth); });
+
+    // Header rows
+    rows.push([schoolName]);
+    rows.push(['Monthly Financial Report — ' + monthNames[selMon-1] + ' ' + selYear]);
+    rows.push(['Generated', new Date().toLocaleDateString('en-IN')]);
+    rows.push([]);
+
+    // Summary
+    const income  = monthTx.filter(function(t){ return t.type==='income';  }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    const expense = monthTx.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    rows.push(['SUMMARY']);
+    rows.push(['Total Income', income]);
+    rows.push(['Total Expense', expense]);
+    rows.push(['Net Profit', income - expense]);
+    rows.push([]);
+
+    // All transactions
+    rows.push(['TRANSACTIONS']);
+    rows.push(['Date', 'Description', 'Category', 'Type', 'Amount (₹)']);
+    var sorted = monthTx.slice().sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    sorted.forEach(function(t){
+      rows.push([
+        t.date || '',
+        t.description || t.note || '',
+        t.category || '',
+        t.type || '',
+        t.amount || 0
+      ]);
+    });
+    rows.push([]);
+    rows.push(['', '', '', 'Total Income', income]);
+    rows.push(['', '', '', 'Total Expense', expense]);
+    rows.push(['', '', '', 'Net Profit', income - expense]);
+
+  } else {
+    const selYear = (yf && yf.value) ? yf.value : String(new Date().getFullYear());
+    filename = 'Report_Yearly_' + selYear;
+
+    rows.push([schoolName]);
+    rows.push(['Yearly Financial Report — ' + selYear]);
+    rows.push(['Generated', new Date().toLocaleDateString('en-IN')]);
+    rows.push([]);
+
+    // Month-by-month
+    rows.push(['MONTH-BY-MONTH BREAKDOWN — ' + selYear]);
+    rows.push(['Month', 'Income (₹)', 'Expense (₹)', 'Net Profit (₹)']);
+    var totalInc = 0, totalExp = 0;
+    monthNames.forEach(function(mon, idx){
+      var mm = String(idx+1).padStart(2,'0');
+      var prefix = selYear + '-' + mm;
+      var txs = schoolTx.filter(function(t){ return (t.date||'').startsWith(prefix); });
+      var inc = txs.filter(function(t){ return t.type==='income';  }).reduce(function(s,t){ return s+(t.amount||0); },0);
+      var exp = txs.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+      totalInc += inc; totalExp += exp;
+      rows.push([mon, inc, exp, inc - exp]);
+    });
+    rows.push(['TOTAL', totalInc, totalExp, totalInc - totalExp]);
+    rows.push([]);
+
+    // Multi-year summary
+    rows.push(['MULTI-YEAR SUMMARY']);
+    rows.push(['Year', 'Income (₹)', 'Expense (₹)', 'Net Profit (₹)']);
+    const yearsSet = new Set();
+    schoolTx.forEach(function(t){ if(t.date) yearsSet.add(t.date.slice(0,4)); });
+    const thisYear = new Date().getFullYear();
+    for (var y = thisYear; y >= thisYear-5; y--) yearsSet.add(String(y));
+    Array.from(yearsSet).sort(function(a,b){ return b-a; }).forEach(function(yr){
+      var txs = schoolTx.filter(function(t){ return (t.date||'').startsWith(yr); });
+      var inc = txs.filter(function(t){ return t.type==='income';  }).reduce(function(s,t){ return s+(t.amount||0); },0);
+      var exp = txs.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+      rows.push([yr, inc, exp, inc - exp]);
+    });
+    rows.push([]);
+
+    // All transactions for that year
+    rows.push(['ALL TRANSACTIONS — ' + selYear]);
+    rows.push(['Date', 'Description', 'Category', 'Type', 'Amount (₹)']);
+    var yearTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selYear); })
+                         .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    yearTx.forEach(function(t){
+      rows.push([t.date||'', t.description||t.note||'', t.category||'', t.type||'', t.amount||0]);
+    });
+  }
+
+  // Convert rows to CSV
+  var csv = rows.map(function(row){
+    return row.map(function(cell){
+      var s = String(cell == null ? '' : cell);
+      // Quote cells that contain commas, quotes, or newlines
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    }).join(',');
+  }).join('\r\n');
+
+  // Add BOM for Excel UTF-8 compatibility
+  var bom = '\uFEFF';
+  var blob = new Blob([bom + csv], { type: 'text/csv;charset=utf-8;' });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================
@@ -8040,8 +8643,8 @@ function renderDLTests() {
         '</p>';
     } else {
       eList.innerHTML = eligible.map(function(s) {
-        const classes = s.classes || 0;
-        const total = s.totalClasses || 27;
+        classes = s.classes || 0;
+        total = s.totalClasses || 27;
         const done = classes >= total;
         const remaining = total - classes;
         return '<div style="display:flex;align-items:flex-start;justify-content:space-between;padding:12px 14px;' +
@@ -10611,7 +11214,7 @@ function generateStudentInvoice(id) {
   const installments = s.installments||[];
   const invoiceNo = 'INV-' + (s.firebaseId||s.id||'').toString().slice(-6).toUpperCase() + '-' + Date.now().toString().slice(-4);
   const today = new Date().toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
-  const schoolName = (userSchools.find(function(sc){return sc.id===currentSchoolId;})||{}).name || 'DrivePro School';
+  const schoolName = (userSchools.find(function(sc){return sc.id===currentSchoolId;})||{}).name || 'First Gear School';
 
   // Build installments table rows
   let instRows = '';
@@ -10680,7 +11283,7 @@ function generateStudentInvoice(id) {
         instSection +
       '</div>' +
       pendingBox +
-      '<div style="border-top:1px solid var(--border);padding-top:16px;text-align:center;font-size:11px;color:var(--text2);">Generated by DrivePro \u2022 ' + today + ' \u2022 This is a computer-generated invoice.</div>' +
+      '<div style="border-top:1px solid var(--border);padding-top:16px;text-align:center;font-size:11px;color:var(--text2);">Generated by First Gear \u2022 ' + today + ' \u2022 This is a computer-generated invoice.</div>' +
     '</div>';
 
   const modalHTML =
@@ -10737,6 +11340,7 @@ function openStudentDetailModalWithButtons(s) {
     if (footer && !footer.querySelector('.invoice-btn')) {
       const sid = (s.firebaseId || s.id || '').toString();
       let btns = '<button class="btn btn-success invoice-btn" onclick="generateStudentInvoice(\'' + sid + '\')">&#x1F9FE; Invoice</button>';
+      btns += '<button class="btn btn-outline invoice-btn" onclick="printForm15ForStudent(\'' + sid + '\')">🖨️ Form 15</button>';
       if (currentRole === 'owner') {
         btns += '<button class="btn btn-primary invoice-btn" onclick="editStudent(\'' + sid + '\');document.getElementById(\'modal-student-detail\').remove()">&#x270F;&#xFE0F; Edit</button>';
       }
@@ -10768,20 +11372,30 @@ function renderOtherServices() {
       const balColor = bal>0 ? 'var(--danger)' : 'var(--success)';
       const badgeCls = bal<=0 ? 'badge-green' : 'badge-amber';
       const badgeLabel = bal<=0 ? 'Paid' : 'Pending';
+      const formBadge = function(label, status) {
+        if (!status) return '';
+        const col = status==='approved' ? 'background:#dcfce7;color:#15803d' : status==='submitted' ? 'background:#dbeafe;color:#1d4ed8' : 'background:#fef3c7;color:#b45309';
+        return '<span style="font-size:10px;padding:2px 5px;border-radius:4px;' + col + ';margin-right:2px;">' + label + ': ' + status + '</span>';
+      };
       return '<tr>' +
-        '<td><div style="font-weight:500">' + (svc.clientName||'—') + '</div><div style="font-size:11px;color:var(--text2)">' + (svc.clientPhone||'') + '</div></td>' +
-        '<td style="font-size:12px;color:var(--text2);max-width:150px;">' + (svc.clientAddress||'—') + '</td>' +
+        '<td><div style="font-weight:500">' + (svc.clientName||'—') + '</div>' +
+          '<div style="font-size:11px;color:var(--text2)">' + (svc.clientPhone||'') + '</div>' +
+          (svc.vehicleNumber ? '<div style="font-size:11px;font-family:monospace;background:#f1f5f9;display:inline-block;padding:1px 5px;border-radius:3px;margin-top:2px;">' + svc.vehicleNumber + '</div>' : '') +
+        '</td>' +
+        '<td style="font-size:12px;color:var(--text2);max-width:130px;">' + (svc.clientAddress||'—') + '</td>' +
         '<td style="font-size:12px;">' + (svc.serviceType||'—') + '</td>' +
+        '<td>' + formBadge('F5', svc.form5Status||'') + formBadge('F14', svc.form14Status||'') + ((!svc.form5Status&&!svc.form14Status)?'<span style="font-size:11px;color:var(--text2)">—</span>':'') + '</td>' +
         '<td style="font-weight:600;">\u20b9' + (svc.totalAmount||0).toLocaleString() + '</td>' +
         '<td style="color:var(--success);font-weight:600;">\u20b9' + (svc.amountPaid||0).toLocaleString() + '</td>' +
         '<td style="color:' + balColor + ';font-weight:600;">\u20b9' + Math.abs(bal).toLocaleString() + '</td>' +
         '<td><span class="badge ' + badgeCls + '">' + badgeLabel + '</span></td>' +
         '<td><div style="display:flex;gap:4px;">' +
           '<button class="btn btn-outline btn-sm" onclick="viewOtherService(\'' + svc.id + '\')">View</button>' +
+          (currentRole === 'owner' ? '<button class="btn btn-outline btn-sm" onclick="openEditOtherService(\'' + (svc.firebaseId||svc.id) + '\')">&#9998; Edit</button>' : '') +
           '<button class="btn btn-primary btn-sm" onclick="generateServiceInvoice(\'' + svc.id + '\')">\ud83e\uddfe</button>' +
         '</div></td></tr>';
     }).join('');
-    tableHtml = '<table class="data-table"><thead><tr><th>Client Name</th><th>Address</th><th>Service</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    tableHtml = '<table class="data-table"><thead><tr><th>Client</th><th>Address</th><th>Service</th><th>Forms</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
   page.innerHTML =
@@ -10796,17 +11410,836 @@ function renderOtherServices() {
       '<div class="stat-card blue"><div class="sc-label">Active Installments</div><div class="sc-value" style="color:var(--accent2)">' + activeInst + '</div><div class="sc-sub">Ongoing</div></div>' +
     '</div>' +
     '<div class="card" style="padding:0;overflow:hidden">' +
-      '<div style="padding:16px 20px;border-bottom:1px solid var(--border);">' +
-        '<input type="text" placeholder="\ud83d\udd0d Search clients..." style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;width:300px;font-family:\'DM Sans\';font-size:13px;" oninput="filterOtherServices(this.value)">' +
+      '<div style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+        '<input id="os-search-input" type="text" placeholder="🔍 Search by name, phone or vehicle number..." style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;flex:1;min-width:220px;font-family:\'DM Sans\';font-size:13px;" oninput="filterOtherServices(this.value)">' +
+        '<button class="btn btn-outline btn-sm" onclick="filterOtherServices(document.getElementById(\'os-search-input\').value)" style="white-space:nowrap;">🔍 Search</button>' +
+        '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'os-search-input\').value=\'\';filterOtherServices(\'\')">✕ Clear</button>' +
       '</div>' +
       '<div id="other-services-list">' + tableHtml + '</div>' +
     '</div>';
 }
 
+
+// ═══════════════════════════════════════════════════════════
+//  FORMS REGISTRY — Form 5 & Form 14 separate sidebar pages
+// ═══════════════════════════════════════════════════════════
+
+function getCurrentSchool() {
+  return (userSchools || []).find(function(s){ return s.id === currentSchoolId; }) || {};
+}
+
+function renderFormsRegistry(formType) {
+  formType = formType || 'Form 5';
+  const pageId = formType === 'Form 5' ? 'page-forms-registry' : 'page-form14-registry';
+  const page = document.getElementById(pageId);
+  if (!page) return;
+
+  const school = getCurrentSchool();
+  const schoolName    = school.name    || 'First Gear Driving School';
+  const schoolAddress = school.address || '';
+  const schoolPhone   = school.phone   || '';
+  const licenseNo     = school.licenseNo || school.license || '';
+  const canEdit = currentRole === 'owner' || currentRole === 'office';
+
+  const allForms = (data.forms || []).filter(function(f) {
+    return f.formType === formType && (!currentSchoolId || f.schoolId === currentSchoolId);
+  });
+
+  function statusBadge(status) {
+    const map = { 'Pending':'background:#fef3c7;color:#b45309', 'Submitted':'background:#dbeafe;color:#1d4ed8', 'Approved':'background:#dcfce7;color:#15803d', 'Rejected':'background:#fee2e2;color:#b91c1c' };
+    const s = status || 'Pending';
+    return '<span style="font-size:11px;padding:3px 8px;border-radius:5px;font-weight:500;' + (map[s]||map['Pending']) + '">' + s + '</span>';
+  }
+
+  const isForm5 = formType === 'Form 5';
+  const accentColor = isForm5 ? '#15803d' : '#7c3aed';
+  const bgColor     = isForm5 ? '#f0fdf4' : '#fdf4ff';
+  const borderColor = isForm5 ? '#bbf7d0' : '#e9d5ff';
+  const icon        = isForm5 ? '📄' : '📝';
+  const ruleRef     = isForm5 ? 'See Rules 14(e), 17(b) and 27(d)' : 'Rules 27(a) & (b) — Registration of trainees';
+
+  // Table columns differ per form
+  const headerRow = isForm5
+    ? '<tr><th>#</th><th>Serial No.</th><th>Candidate Name</th><th>Vehicle No.</th><th>Vehicle Class</th><th>Training Period</th><th>RTO Office</th><th>Status</th><th>Action</th></tr>'
+    : '<tr><th>#</th><th>Reg. No.</th><th>Candidate Name</th><th>Son/Wife/Daughter of</th><th>D.O.B</th><th>Vehicle Class</th><th>Enrollment Date</th><th>Completion Date</th><th>Status</th><th>Action</th></tr>';
+
+  const ftCode = isForm5 ? 'Form5' : 'Form14';
+  const bodyRows = allForms.length === 0
+    ? '<tr><td colspan="' + (isForm5?9:10) + '" style="text-align:center;padding:30px;color:var(--text2);">No records yet. Click "+ Add" to create one.</td></tr>'
+    : allForms.map(function(f, idx) {
+        const fid = f.firebaseId || f.id || '';
+        const actionBtns = canEdit
+          ? '<div style="display:flex;gap:4px;">' +
+              '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\',ftCode)">\uD83D\uDDA8 Print</button>' +
+              '<button class="btn btn-outline btn-sm" onclick="editFormRecord(\'' + fid + '\')">✏️</button>' +
+              (currentRole==='owner' ? '<button class="btn btn-danger btn-sm" onclick="deleteFormRecord(\'' + fid + '\')">🗑</button>' : '') +
+            '</div>'
+          : '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\',ftCode)">\uD83D\uDDA8 Print</button>';
+
+        if (isForm5) {
+          return '<tr>' +
+            '<td style="font-size:12px;">' + (idx+1) + '</td>' +
+            '<td style="font-size:12px;font-weight:600;">' + (f.serialNo||'—') + '</td>' +
+            '<td><strong>' + (f.candidateName||'—') + '</strong><div style="font-size:11px;color:var(--text2)">' + (f.phone||'') + '</div></td>' +
+            '<td style="font-family:monospace;font-size:12px;">' + (f.vehicleNumber||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.vehicleClass||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.startDate||'—') + ' → ' + (f.endDate||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.rtoOffice||'—') + '</td>' +
+            '<td>' + statusBadge(f.status) + '</td>' +
+            '<td>' + actionBtns + '</td>' +
+          '</tr>';
+        } else {
+          return '<tr>' +
+            '<td style="font-size:12px;">' + (idx+1) + '</td>' +
+            '<td style="font-size:12px;font-weight:600;">' + (f.serialNo||'—') + '</td>' +
+            '<td><strong>' + (f.candidateName||'—') + '</strong><div style="font-size:11px;color:var(--text2)">' + (f.phone||'') + '</div></td>' +
+            '<td style="font-size:12px;">' + (f.guardianName||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.dob||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.vehicleClass||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.enrollDate||'—') + '</td>' +
+            '<td style="font-size:12px;">' + (f.endDate||'—') + '</td>' +
+            '<td>' + statusBadge(f.status) + '</td>' +
+            '<td>' + actionBtns + '</td>' +
+          '</tr>';
+        }
+      }).join('');
+
+  page.innerHTML =
+    '<div class="page-header">' +
+      '<div>' +
+        '<h2>' + icon + ' ' + formType + ' Registry</h2>' +
+        '<p style="font-size:12px;color:var(--text2);">' + ruleRef + ' · ' + schoolName + '</p>' +
+      '</div>' +
+      (canEdit ? '<button class="btn btn-primary" onclick="openAddFormModal(\'' + formType + '\')">+ Add ' + formType + ' Record</button>' : '') +
+    '</div>' +
+
+    // School info banner — auto-filled
+    '<div style="background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">' +
+      '<div>' +
+        '<div style="font-size:15px;font-weight:700;color:' + accentColor + ';">' + schoolName + '</div>' +
+        (schoolAddress ? '<div style="font-size:12px;color:var(--text2);margin-top:2px;">' + schoolAddress + '</div>' : '') +
+        (schoolPhone   ? '<div style="font-size:12px;color:var(--text2);">📞 ' + schoolPhone + '</div>' : '') +
+        (licenseNo     ? '<div style="font-size:12px;color:var(--text2);">Licence No. ' + licenseNo + '</div>' : '') +
+      '</div>' +
+      '<div style="text-align:right;">' +
+        '<div style="font-size:22px;font-weight:700;color:' + accentColor + ';">' + allForms.length + '</div>' +
+        '<div style="font-size:11px;color:var(--text2);">Total records</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="card" style="padding:0;overflow:hidden;">' +
+      '<table class="data-table"><thead>' + headerRow + '</thead><tbody>' + bodyRows + '</tbody></table>' +
+    '</div>';
+}
+
+// ──────────────────────────────────────────────
+//  FORM 15 REGISTRY PAGE
+//  Shows students + other-service clients with Form 15 print button
+// ──────────────────────────────────────────────
+function renderForm15Registry() {
+  const page = document.getElementById('page-form15-registry');
+  if (!page) return;
+
+  const school = getCurrentSchool();
+  const schoolName = school.name || 'Driving School';
+
+  // Students for current school
+  const students = (data.students || []).filter(function(s) {
+    return !currentSchoolId || s.schoolId === currentSchoolId;
+  });
+
+  // Other-service clients
+  const services = (data.otherServices || []).filter(function(s) {
+    return !currentSchoolId || s.schoolId === currentSchoolId;
+  });
+
+  const totalRecords = students.length + services.length;
+
+  // Build student rows
+  const studentRows = students.length === 0 ? '' : students.map(function(s, i) {
+    const sid = s.firebaseId || s.id || '';
+    return '<tr>' +
+      '<td style="font-size:12px;color:var(--text2);">' + (i + 1) + '</td>' +
+      '<td><strong>' + (s.name || '—') + '</strong>' +
+        (s.codeNo ? '<div style="font-size:11px;color:var(--text2);">Code: ' + s.codeNo + '</div>' : '') +
+      '</td>' +
+      '<td style="font-size:12px;">' + (s.phone || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.vehicle || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.enrolled || '—') + '</td>' +
+      '<td><span class="badge badge-blue">Student</span></td>' +
+      '<td>' +
+        '<button class="btn btn-accent btn-sm" onclick="printForm15ForStudent(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+
+  // Build other-service rows
+  const serviceRows = services.length === 0 ? '' : services.map(function(s, i) {
+    const sid = s.firebaseId || s.id || '';
+    return '<tr>' +
+      '<td style="font-size:12px;color:var(--text2);">' + (students.length + i + 1) + '</td>' +
+      '<td><strong>' + (s.clientName || '—') + '</strong>' +
+        (s.vehicleNumber ? '<div style="font-size:11px;color:var(--text2);">Vehicle: ' + s.vehicleNumber + '</div>' : '') +
+      '</td>' +
+      '<td style="font-size:12px;">' + (s.clientPhone || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.serviceType || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.date || '—') + '</td>' +
+      '<td><span class="badge badge-purple">Other Service</span></td>' +
+      '<td>' +
+        '<button class="btn btn-accent btn-sm" onclick="printForm15ForService(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+
+  const emptyMsg = (students.length === 0 && services.length === 0)
+    ? '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text2);">No students or service clients found for this school.</td></tr>'
+    : '';
+
+  page.innerHTML =
+    '<div class="page-header">' +
+      '<div>' +
+        '<h2>📒 Form 15 — Training Log Registry</h2>' +
+        '<p style="font-size:12px;color:var(--text2);">Form No. 15 [See Rule 27(l)] · Daily Training Record · ' + schoolName + '</p>' +
+      '</div>' +
+    '</div>' +
+
+    '<div style="background:#fce4ec;border:1px solid #f48fb1;border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">' +
+      '<div>' +
+        '<div style="font-size:15px;font-weight:700;color:#7b1a1a;">📒 Form 15 — Daily Training Log</div>' +
+        '<div style="font-size:12px;color:#c62828;margin-top:2px;">Pink book issued to each trainee. Click "Print Form 15" to generate the pre-filled booklet cover page.</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:12px;">' +
+        '<div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:#7b1a1a;">' + students.length + '</div><div style="font-size:11px;color:#c62828;">Students</div></div>' +
+        '<div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:#7b1a1a;">' + services.length + '</div><div style="font-size:11px;color:#c62828;">Other Clients</div></div>' +
+        '<div style="text-align:center;"><div style="font-size:22px;font-weight:700;color:#7b1a1a;">' + totalRecords + '</div><div style="font-size:11px;color:#c62828;">Total</div></div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="card" style="padding:0;overflow:hidden;">' +
+      '<div style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;">' +
+        '<input type="text" placeholder="🔍 Search by name or phone..." id="f15-search" ' +
+          'style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;flex:1;font-family:\'DM Sans\';font-size:13px;" ' +
+          'oninput="filterForm15Registry(this.value)">' +
+      '</div>' +
+      '<div id="form15-table-wrap">' +
+        '<table class="data-table">' +
+          '<thead><tr>' +
+            '<th>#</th><th>Name</th><th>Phone</th><th>Vehicle / Service</th><th>Enrolled / Date</th><th>Type</th><th>Action</th>' +
+          '</tr></thead>' +
+          '<tbody>' + emptyMsg + studentRows + serviceRows + '</tbody>' +
+        '</table>' +
+      '</div>' +
+    '</div>';
+
+  // Store data for filtering
+  window._f15Students = students;
+  window._f15Services = services;
+}
+
+function filterForm15Registry(query) {
+  const q = (query || '').toLowerCase().trim();
+  const students = window._f15Students || [];
+  const services = window._f15Services || [];
+
+  const filteredStudents = q ? students.filter(function(s) {
+    return (s.name||'').toLowerCase().includes(q) || (s.phone||'').includes(q) || (s.codeNo||'').toLowerCase().includes(q);
+  }) : students;
+
+  const filteredServices = q ? services.filter(function(s) {
+    return (s.clientName||'').toLowerCase().includes(q) || (s.clientPhone||'').includes(q) || (s.vehicleNumber||'').toLowerCase().includes(q);
+  }) : services;
+
+  const studentRows = filteredStudents.map(function(s, i) {
+    const sid = s.firebaseId || s.id || '';
+    return '<tr>' +
+      '<td style="font-size:12px;color:var(--text2);">' + (i + 1) + '</td>' +
+      '<td><strong>' + (s.name || '—') + '</strong>' +
+        (s.codeNo ? '<div style="font-size:11px;color:var(--text2);">Code: ' + s.codeNo + '</div>' : '') +
+      '</td>' +
+      '<td style="font-size:12px;">' + (s.phone || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.vehicle || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.enrolled || '—') + '</td>' +
+      '<td><span class="badge badge-blue">Student</span></td>' +
+      '<td><button class="btn btn-accent btn-sm" onclick="printForm15ForStudent(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button></td>' +
+    '</tr>';
+  }).join('');
+
+  const serviceRows = filteredServices.map(function(s, i) {
+    const sid = s.firebaseId || s.id || '';
+    return '<tr>' +
+      '<td style="font-size:12px;color:var(--text2);">' + (filteredStudents.length + i + 1) + '</td>' +
+      '<td><strong>' + (s.clientName || '—') + '</strong>' +
+        (s.vehicleNumber ? '<div style="font-size:11px;color:var(--text2);">Vehicle: ' + s.vehicleNumber + '</div>' : '') +
+      '</td>' +
+      '<td style="font-size:12px;">' + (s.clientPhone || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.serviceType || '—') + '</td>' +
+      '<td style="font-size:12px;">' + (s.date || '—') + '</td>' +
+      '<td><span class="badge badge-purple">Other Service</span></td>' +
+      '<td><button class="btn btn-accent btn-sm" onclick="printForm15ForService(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button></td>' +
+    '</tr>';
+  }).join('');
+
+  const emptyMsg = (filteredStudents.length === 0 && filteredServices.length === 0)
+    ? '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text2);">No results found for "' + query + '"</td></tr>'
+    : '';
+
+  const wrap = document.getElementById('form15-table-wrap');
+  if (wrap) {
+    wrap.innerHTML = '<table class="data-table"><thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Vehicle / Service</th><th>Enrolled / Date</th><th>Type</th><th>Action</th></tr></thead><tbody>' + emptyMsg + studentRows + serviceRows + '</tbody></table>';
+  }
+}
+
+// ──────────────────────────────────────────────
+//  PRINT FORM 5 or FORM 14 as actual government form layout
+// ──────────────────────────────────────────────
+function printFormRecord(id, formTypeCode) {
+  const f = (data.forms||[]).find(function(x){ return (x.firebaseId||x.id)===id; });
+  if (!f) { showToast('Record not found'); return; }
+
+  const school = getCurrentSchool();
+  const schoolName    = school.name    || 'First Gear Driving School';
+  const schoolAddress = school.address || '';
+  const schoolPhone   = school.phone   || '';
+  const licenseNo     = school.licenseNo || school.license || '';
+  const principal     = school.principal || school.ownerName || '';
+
+  let formHTML = '';
+
+  if (formTypeCode === 'Form5' || f.formType === 'Form 5') {
+    formHTML = `
+<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Form 5 - ${f.candidateName||''}</title>
+<style>
+  @page { size: A5; margin: 12mm; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Times New Roman', serif; font-size: 13px; color: #000; }
+  .border-box { border: 2.5px solid #5b1a1a; border-radius: 8px; padding: 16px 20px; }
+  h1 { font-size: 15px; font-weight: bold; text-align: center; color: #5b1a1a; letter-spacing: 0.03em; margin-bottom: 2px; }
+  .school-addr { font-size: 11px; text-align: center; color: #333; margin-bottom: 10px; }
+  .form-title { font-size: 14px; font-weight: bold; text-align: center; margin: 8px 0 2px; }
+  .rule-ref { font-size: 10px; text-align: center; color: #555; margin-bottom: 10px; }
+  .cert-label { font-size: 12px; font-weight: bold; text-align: center; text-decoration: underline; margin-bottom: 10px; letter-spacing: 0.04em; }
+  .body-text { font-size: 12.5px; line-height: 2.0; }
+  .fill-line { border-bottom: 1px dotted #333; display: inline-block; min-width: 180px; padding: 0 4px; font-weight: bold; }
+  .fill-line-long { border-bottom: 1px dotted #333; display: inline-block; min-width: 260px; padding: 0 4px; font-weight: bold; }
+  .sig-row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 24px; }
+  .sig-block { text-align: center; font-size: 11px; }
+  .sig-block .sig-line { border-top: 1px solid #000; width: 120px; margin: 0 auto 4px; }
+  .school-stamp { text-align: center; font-size: 11px; font-weight: bold; border: 1.5px solid #333; padding: 8px 12px; border-radius: 4px; }
+  .serial-no { float: right; font-size: 14px; font-weight: bold; color: #cc0000; }
+</style></head><body>
+<div class="border-box">
+  <span class="serial-no">No. ${f.serialNo||'______'}</span>
+  <h1>${schoolName}</h1>
+  <div class="school-addr">${schoolAddress}${schoolPhone ? ' · ' + schoolPhone : ''}${licenseNo ? '<br>Lice. No. ' + licenseNo : ''}</div>
+  <div class="form-title">FORM - 5</div>
+  <div class="rule-ref">(See Rules 14(e), 17(b) and 27(d))</div>
+  <div class="cert-label">DRIVING CERTIFICATE ISSUED BY DRIVING SCHOOL OR ESTABLISHMENTS</div>
+  <div class="body-text">
+    This is to certify that Smt/Sri/Kum. <span class="fill-line-long">${f.candidateName||''}</span><br>
+    Son/Wife/ Daughter <span class="fill-line-long">${f.guardianName||''}</span><br>
+    residing at <span class="fill-line-long" style="min-width:320px;">${f.address||''}</span><br>
+    was enrolled in this school on <span class="fill-line">${f.enrollDate||''}</span> and her/his name is registered<br>
+    as serial Number <span class="fill-line">${f.serialNo||''}</span> in our register in form 14 and that he/she has undergone<br>
+    the course of training in driving of <span class="fill-line">${f.vehicleClass||''}</span><br>
+    according to the syllabus prescribed for a period form <span class="fill-line">${f.startDate||''}</span> to<br>
+    <span class="fill-line">${f.endDate||''}</span> satisfactory.
+  </div>
+  <div class="sig-row">
+    <div class="sig-block">
+      <div style="font-size:11px;margin-bottom:4px;">Date of Issue <strong>${f.issueDate||f.submissionDate||new Date().toLocaleDateString('en-IN')}</strong></div>
+    </div>
+    <div class="school-stamp">
+      <div style="margin-bottom:6px;">${principal ? 'Sd/- ' + principal : 'Sd/-'}</div>
+      <div style="font-size:10px;margin-bottom:2px;">PRINCIPAL</div>
+      <div style="font-weight:bold;font-size:11px;">${schoolName.toUpperCase()}</div>
+      ${schoolAddress ? '<div style="font-size:10px;">' + schoolAddress + '</div>' : ''}
+      ${licenseNo ? '<div style="font-size:10px;">Lice. No. ' + licenseNo + '</div>' : ''}
+    </div>
+  </div>
+</div>
+</body></html>`;
+  } else {
+    // Form 14 — Training Register (pink register style)
+    formHTML = `
+<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Form 14 - ${f.candidateName||''}</title>
+<style>
+  @page { size: A4; margin: 15mm; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Times New Roman', serif; font-size: 13px; color: #000; }
+  h1 { font-size: 16px; font-weight: bold; text-align: center; margin-bottom: 3px; }
+  .school-addr { font-size: 11px; text-align: center; color: #333; margin-bottom: 6px; }
+  .form-title { font-size: 14px; font-weight: bold; text-align: center; margin: 8px 0; }
+  .rule-ref { font-size: 11px; text-align: center; margin-bottom: 14px; }
+  table.reg { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  table.reg td { border: 1.5px solid #333; padding: 8px 10px; font-size: 12.5px; vertical-align: top; }
+  table.reg td.label { background: #fce7f3; font-weight: 500; width: 55%; }
+  table.reg td.value { font-weight: bold; min-height: 28px; }
+  .header-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; border: 2px solid #333; padding: 10px 14px; }
+  .sig-section { margin-top: 24px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .sig-line { border-top: 1px solid #000; width: 150px; margin-top: 30px; }
+  .reg-no { font-size: 18px; font-weight: bold; color: #cc0000; float: right; }
+</style></head><body>
+<div style="border: 2.5px solid #333; padding: 18px 22px;">
+  <span class="reg-no">${f.serialNo||''}</span>
+  <div style="font-size:11px;color:#555;margin-bottom:4px;">Rule 27 (a) and (b)</div>
+  <div style="font-size:12px;margin-bottom:4px;">Register of Trainees at Driving School — <strong>${schoolName}</strong></div>
+  <h1>${schoolName}</h1>
+  <div class="school-addr">${schoolAddress}${schoolPhone ? ' · 📞 ' + schoolPhone : ''}</div>
+  ${licenseNo ? '<div class="school-addr">Licence No. ' + licenseNo + '</div>' : ''}
+  <div class="form-title">FORM 14</div>
+  <div class="rule-ref">(Registration of Trainees at Driving School or Establishment)</div>
+
+  <table class="reg">
+    <tr><td class="label">Enrolled Year (ನೋಂದಣಿಯಾದ ವರ್ಷ)</td><td class="value">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td></tr>
+    <tr><td class="label">1. Registration Number (ನೋಂದಣಿ ಸಂಖ್ಯೆ)</td><td class="value">${f.serialNo||''}</td></tr>
+    <tr><td class="label">2. Name of Trainee (ತರಬೇತಿದಾರರ ಹೆಸರು ಮತ್ತು ಭಾವಚಿತ್ರ)</td><td class="value">${f.candidateName||''}</td></tr>
+    <tr><td class="label">3. Son/Wife/Daughter (ಮಗ/ಹೆಂಡತಿ/ಮಗಳು)</td><td class="value">${f.guardianName||''}</td></tr>
+    <tr>
+      <td class="label">4. Address (ವಿಳಾಸ ವಿಕಾಸ)<br>
+        <span style="font-size:11px;">a) Permanent (ತಾತ್ಕಾಲಿಕ ವಿಳಾಸ)</span><br>
+        <span style="font-size:11px;">b) Local (ಕಛೇರಿಯ ವಿಳಾಸ (ಇದ್ದಲ್ಲಿ)) — ${schoolName}</span>
+      </td>
+      <td class="value">${f.address||''}</td>
+    </tr>
+    <tr><td class="label">5. Date of Birth (ಹುಟ್ಟಿದ ದಿನಾಂಕ)</td><td class="value">${f.dob||''}</td></tr>
+    <tr><td class="label">6. Class of vehicle trained in (ಯಾವ ವಾಹನ ವರ್ಗದಲ್ಲಿ ತರಬೇತಿ ಪಡೆಯುತ್ತಾರೆ)</td><td class="value">${f.vehicleClass||''} ${f.vehicleNumber ? '· Vehicle No: ' + f.vehicleNumber : ''}</td></tr>
+    <tr><td class="label">7. Registration Date (ನೋಂದಣಿ ದಿನಾಂಕ)</td><td class="value">${f.enrollDate||''}</td></tr>
+    <tr><td class="label">8. Start and End class no. (ಕಲಿಕೆದಾರನ ಸಂಖ್ಯೆ ಮತ್ತು ಮುಕ್ತಾಯದ ದಿನಾಂಕ)</td><td class="value">${f.startDate||''} — ${f.endDate||''}</td></tr>
+    <tr><td class="label">9. Date of completion (ಪೂರ್ಣ ತರಬೇತಿ ಪಡೆದ ದಿನಾಂಕ)</td><td class="value">${f.endDate||''}</td></tr>
+    <tr><td class="label">10. Date of passing test (ವಾಹನ ಚಾಲನೆ ಮಾಡಲು ಪಾಸಾದ ದಿನಾಂಕ)</td><td class="value">${f.issueDate||''}</td></tr>
+    <tr><td class="label">11. DL Number & Date issued & Authority (ಚಾಲನ ಪತ್ರದ ಸಂಖ್ಯೆ ಮತ್ತು ಪಡೆದ ದಿನಾಂಕ)</td><td class="value">${f.submissionDate||''} · ${f.rtoOffice||''}</td></tr>
+    <tr><td class="label">12. Remarks / Notes (ಅಭಿಪ್ರಾಯ / ಗುರುತುಗಳು)</td><td class="value">${f.remarks||''}</td></tr>
+    <tr><td class="label">13. Signature of trainee (ಅನುಸ್ಚಾನ ಪತ್ರ ಹೊಂದಿದವರ ಸಹಿ/ತರಬೇತಿದಾರರು)</td><td class="value" style="height:40px;"></td></tr>
+  </table>
+
+  <div class="sig-section">
+    <div>
+      <div class="sig-line"></div>
+      <div style="font-size:11px;margin-top:4px;">Signature of Trainee</div>
+    </div>
+    <div style="text-align:center;">
+      <div style="font-size:11px;margin-bottom:4px;">Date: ${f.issueDate||f.submissionDate||new Date().toLocaleDateString('en-IN')}</div>
+      <div class="sig-line" style="margin:0 auto;"></div>
+      <div style="font-size:11px;margin-top:4px;">${principal ? principal + '<br>' : ''}Principal / ಪ್ರಾಂಶುಪಾಲರು</div>
+      <div style="font-size:11px;font-weight:bold;margin-top:2px;">${schoolName}</div>
+    </div>
+  </div>
+</div>
+</body></html>`;
+  }
+
+  const win = window.open('', '_blank');
+  win.document.write(formHTML);
+  win.document.close();
+  win.focus();
+  setTimeout(function(){ win.print(); }, 500);
+}
+
+// ──────────────────────────────────────────────
+//  PRINT FORM 15 — Daily Training Record (Pink Book)
+//  Used for Other Services / non-student clients
+// ──────────────────────────────────────────────
+function printForm15ForService(id) {
+  const svc = (data.otherServices||[]).find(function(s){ return (s.firebaseId||s.id)===id; });
+  if (!svc) { showToast('Service record not found'); return; }
+
+  const school = getCurrentSchool();
+  const schoolName    = school.name    || 'First Gear Driving School';
+  const schoolAddress = school.address || '';
+  const schoolPhone   = school.phone   || '';
+  const licenseNo     = school.licenseNo || school.license || '';
+  const principal     = school.principal || school.ownerName || '';
+  const signatureUrl  = school.signatureUrl || school.stampUrl || '';
+  const enrolmentNo   = svc.enrolmentNo || svc.codeNo || svc.vehicleNumber || '';
+
+  const rows31 = Array.from({length:31}, function(_,i){
+    return `<tr>
+      <td style="text-align:center;padding:3px 2px;font-size:11px;">${i+1}</td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+    </tr>`;
+  }).join('');
+
+  const form15HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Form 15 — ${svc.clientName||''}</title>
+<style>
+  @page { size: 148mm 210mm; margin: 8mm 6mm; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Times New Roman', serif; font-size: 12px; color: #000; background: #fce4ec; }
+  .outer { border: 2px solid #7b1a1a; border-radius: 6px; padding: 10px 12px; min-height: 192mm; background: #fce4ec; }
+  .logo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .school-no { font-size: 16px; font-weight: bold; color: #cc0000; font-family: serif; }
+  .school-name { font-size: 17px; font-weight: bold; text-align: center; color: #7b1a1a; letter-spacing: 0.02em; line-height: 1.2; }
+  .school-sub { font-size: 10px; text-align: center; color: #444; margin-bottom: 2px; }
+  .form-no { font-size: 13px; font-weight: bold; color: #7b1a1a; text-align: right; }
+  .rule-ref { font-size: 10px; text-align: right; color: #555; }
+  .meta-row { display: flex; gap: 0; margin: 6px 0 4px; }
+  .meta-field { flex: 1; border-bottom: 1px solid #333; font-size: 11px; padding: 2px 3px; min-height: 18px; }
+  .meta-label { font-size: 10px; color: #444; }
+  .field-row { display: flex; align-items: baseline; gap: 4px; margin: 3px 0; font-size: 11px; }
+  .field-line { flex: 1; border-bottom: 1px solid #555; padding: 1px 3px; min-height: 16px; font-weight: bold; }
+  table.training { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+  table.training th { border: 1px solid #7b1a1a; padding: 4px 3px; background: #f8bbd0; text-align: center; font-size: 10px; font-weight: bold; line-height: 1.2; }
+  table.training td { border: 1px solid #aaa; padding: 2px; min-height: 14px; }
+  .sig-footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 8px; }
+  .sig-block { font-size: 10px; text-align: center; }
+  .sig-img { max-height: 50px; max-width: 100px; display: block; margin: 0 auto 4px; }
+  .sig-line { border-top: 1px solid #333; width: 110px; margin: 0 auto 3px; }
+  .principal-box { border: 1px solid #7b1a1a; padding: 6px 10px; text-align: center; border-radius: 4px; font-size: 10px; }
+</style></head><body>
+<div class="outer">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+      <div class="school-no">No. ${licenseNo||'______'}</div>
+      <div style="font-size:9px;color:#555;">FORM No. 15. [See Rule 27 (l)]</div>
+      <div style="font-size:9px;color:#555;">📞 ${schoolPhone}</div>
+    </div>
+    <div style="text-align:center;flex:1;padding:0 8px;">
+      <div class="school-name">${schoolName.toUpperCase()}</div>
+      ${schoolAddress ? `<div class="school-sub">${schoolAddress}</div>` : ''}
+    </div>
+    <div style="text-align:right;">
+      <div class="form-no">FORM 15</div>
+      <div class="rule-ref">[See Rule 27(l)]</div>
+    </div>
+  </div>
+
+  <div class="field-row" style="margin-top:8px;">
+    <span>Student Phone No.:</span>
+    <span class="field-line">${svc.clientPhone||''}</span>
+    <span style="margin-left:10px;">Code No.:</span>
+    <span class="field-line">${enrolmentNo}</span>
+  </div>
+  <div class="field-row">
+    <span>Name of the Trainee:</span>
+    <span class="field-line" style="font-size:12px;">${svc.clientName||''}</span>
+  </div>
+  <div style="display:flex;gap:10px;margin-top:3px;">
+    <div class="field-row" style="flex:1;">
+      <span style="white-space:nowrap;">Enrolment No.:</span>
+      <span class="field-line">${enrolmentNo}</span>
+    </div>
+    <div class="field-row" style="flex:1;">
+      <span style="white-space:nowrap;">Date of Enrolment:</span>
+      <span class="field-line">${svc.date||''}</span>
+    </div>
+  </div>
+
+  <table class="training">
+    <thead>
+      <tr>
+        <th rowspan="2" style="width:24px;">No</th>
+        <th rowspan="2">Date</th>
+        <th colspan="2">Hours Spend in<br>Actual Driving</th>
+        <th rowspan="2">Class of<br>Vehicle</th>
+        <th rowspan="2">Signature<br>of<br>Instructor</th>
+        <th rowspan="2">Signature<br>of<br>Trainee</th>
+      </tr>
+      <tr>
+        <th>From<br>Hrs.</th>
+        <th>To<br>Hrs.</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows31}
+    </tbody>
+  </table>
+
+  <div class="sig-footer">
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div>Signature of Trainee</div>
+    </div>
+    <div class="principal-box">
+      ${signatureUrl ? `<img src="${signatureUrl}" class="sig-img" alt="Principal Signature">` : '<div style="height:40px;"></div>'}
+      <div style="font-weight:bold;margin-top:2px;">${principal ? 'Sd/- ' + principal : 'Principal'}</div>
+      <div style="font-weight:bold;font-size:10px;">${schoolName}</div>
+      ${licenseNo ? `<div>Lice. No. ${licenseNo}</div>` : ''}
+    </div>
+  </div>
+</div>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(form15HTML);
+  win.document.close();
+  win.focus();
+  setTimeout(function(){ win.print(); }, 500);
+}
+
+// Print Form 15 from student form record (for student training log)
+function printForm15ForStudent(studentId) {
+  const student = (data.students||[]).find(function(s){ return (s.firebaseId||s.id)===studentId; });
+  if (!student) { showToast('Student not found'); return; }
+
+  const school = getCurrentSchool();
+  const schoolName    = school.name    || 'First Gear Driving School';
+  const schoolAddress = school.address || '';
+  const schoolPhone   = school.phone   || '';
+  const licenseNo     = school.licenseNo || school.license || '';
+  const principal     = school.principal || school.ownerName || '';
+  const signatureUrl  = school.signatureUrl || school.stampUrl || '';
+
+  const rows31 = Array.from({length:31}, function(_,i){
+    return `<tr>
+      <td style="text-align:center;padding:3px 2px;font-size:11px;">${i+1}</td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+      <td style="padding:3px 2px;"></td>
+    </tr>`;
+  }).join('');
+
+  const form15HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Form 15 — ${student.name||''}</title>
+<style>
+  @page { size: 148mm 210mm; margin: 8mm 6mm; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Times New Roman', serif; font-size: 12px; color: #000; background: #fce4ec; }
+  .outer { border: 2px solid #7b1a1a; border-radius: 6px; padding: 10px 12px; min-height: 192mm; background: #fce4ec; }
+  .school-name { font-size: 17px; font-weight: bold; text-align: center; color: #7b1a1a; letter-spacing: 0.02em; line-height: 1.2; }
+  .school-sub { font-size: 10px; text-align: center; color: #444; margin-bottom: 2px; }
+  .field-row { display: flex; align-items: baseline; gap: 4px; margin: 3px 0; font-size: 11px; }
+  .field-line { flex: 1; border-bottom: 1px solid #555; padding: 1px 3px; min-height: 16px; font-weight: bold; }
+  table.training { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+  table.training th { border: 1px solid #7b1a1a; padding: 4px 3px; background: #f8bbd0; text-align: center; font-size: 10px; font-weight: bold; line-height: 1.2; }
+  table.training td { border: 1px solid #aaa; padding: 2px; min-height: 14px; }
+  .sig-footer { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 8px; }
+  .sig-block { font-size: 10px; text-align: center; }
+  .sig-img { max-height: 50px; max-width: 100px; display: block; margin: 0 auto 4px; }
+  .sig-line { border-top: 1px solid #333; width: 110px; margin: 0 auto 3px; }
+  .principal-box { border: 1px solid #7b1a1a; padding: 6px 10px; text-align: center; border-radius: 4px; font-size: 10px; }
+</style></head><body>
+<div class="outer">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+    <div>
+      <div style="font-size:16px;font-weight:bold;color:#cc0000;">No. ${licenseNo||'______'}</div>
+      <div style="font-size:9px;color:#555;">FORM No. 15. [See Rule 27 (l)]</div>
+      <div style="font-size:9px;color:#555;">📞 ${schoolPhone}</div>
+    </div>
+    <div style="text-align:center;flex:1;padding:0 8px;">
+      <div class="school-name">${schoolName.toUpperCase()}</div>
+      ${schoolAddress ? `<div class="school-sub">${schoolAddress}</div>` : ''}
+    </div>
+    <div style="text-align:right;font-size:13px;font-weight:bold;color:#7b1a1a;">FORM 15<br><span style="font-size:10px;font-weight:normal;color:#555;">[See Rule 27(l)]</span></div>
+  </div>
+
+  <div class="field-row" style="margin-top:8px;">
+    <span>Student Phone No.:</span>
+    <span class="field-line">${student.phone||''}</span>
+    <span style="margin-left:10px;">Code No.:</span>
+    <span class="field-line">${student.codeNo||student.serialNo||''}</span>
+  </div>
+  <div class="field-row">
+    <span>Name of the Trainee:</span>
+    <span class="field-line" style="font-size:12px;">${student.name||''}</span>
+  </div>
+  <div style="display:flex;gap:10px;margin-top:3px;">
+    <div class="field-row" style="flex:1;">
+      <span style="white-space:nowrap;">Enrolment No.:</span>
+      <span class="field-line">${student.codeNo||student.serialNo||''}</span>
+    </div>
+    <div class="field-row" style="flex:1;">
+      <span style="white-space:nowrap;">Date of Enrolment:</span>
+      <span class="field-line">${student.enrolled||''}</span>
+    </div>
+  </div>
+
+  <table class="training">
+    <thead>
+      <tr>
+        <th rowspan="2" style="width:24px;">No</th>
+        <th rowspan="2">Date</th>
+        <th colspan="2">Hours Spend in<br>Actual Driving</th>
+        <th rowspan="2">Class of<br>Vehicle</th>
+        <th rowspan="2">Signature<br>of<br>Instructor</th>
+        <th rowspan="2">Signature<br>of<br>Trainee</th>
+      </tr>
+      <tr>
+        <th>From<br>Hrs.</th>
+        <th>To<br>Hrs.</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows31}
+    </tbody>
+  </table>
+
+  <div class="sig-footer">
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div>Signature of Trainee</div>
+    </div>
+    <div class="principal-box">
+      ${signatureUrl ? `<img src="${signatureUrl}" class="sig-img" alt="Principal Signature">` : '<div style="height:40px;"></div>'}
+      <div style="font-weight:bold;margin-top:2px;">${principal ? 'Sd/- ' + principal : 'Principal'}</div>
+      <div style="font-weight:bold;font-size:10px;">${schoolName}</div>
+      ${licenseNo ? `<div>Lice. No. ${licenseNo}</div>` : ''}
+    </div>
+  </div>
+</div>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(form15HTML);
+  win.document.close();
+  win.focus();
+  setTimeout(function(){ win.print(); }, 500);
+}
+
+
+async function openEditOtherService(id) {
+  const svc = (data.otherServices||[]).find(function(s){ return (s.firebaseId||s.id)===id; });
+  if (!svc) { showToast('Service not found'); return; }
+
+  // Open the add-service modal
+  openAddOtherServiceModal();
+
+  // Wait a tick for modal DOM to render
+  await new Promise(function(r){ setTimeout(r, 80); });
+
+  // Pre-fill all fields
+  const set = function(elId, val) { const el = document.getElementById(elId); if(el) el.value = val||''; };
+  set('os-client-name',    svc.clientName);
+  set('os-client-phone',   svc.clientPhone);
+  set('os-client-address', svc.clientAddress);
+  set('os-vehicle-number', svc.vehicleNumber);
+  set('os-aadhaar',        svc.aadhaar);
+  set('os-service-type',   svc.serviceType);
+  set('os-description',    svc.description);
+  set('os-total-fee',      svc.totalAmount);
+  set('os-amount-paid',    svc.amountPaid);
+  set('os-payment-mode',   svc.paymentMode);
+  set('os-date',           svc.date);
+  set('os-expected-date',  svc.expectedDate);
+  set('os-form5-status',   svc.form5Status);
+  set('os-form5-date',     svc.form5Date);
+  set('os-form14-status',  svc.form14Status);
+  set('os-form14-date',    svc.form14Date);
+  set('os-form-remarks',   svc.formRemarks);
+
+  // Change modal title and save button to reflect edit mode
+  const modalTitle = document.querySelector('#modal-add-other-service .modal-header h3');
+  if (modalTitle) modalTitle.textContent = '✏️ Edit Service Record';
+
+  const saveBtn = document.querySelector('#modal-add-other-service .btn-primary');
+  if (saveBtn) {
+    saveBtn.textContent = '💾 Save Changes';
+    saveBtn.onclick = async function() {
+      await updateOtherService(id);
+    };
+  }
+}
+
+async function updateOtherService(id) {
+  const clientName  = (document.getElementById('os-client-name')?.value||'').trim();
+  const clientPhone = (document.getElementById('os-client-phone')?.value||'').trim();
+  const clientAddr  = (document.getElementById('os-client-address')?.value||'').trim();
+  if (!clientName || !clientPhone) { alert('Please enter client name and phone.'); return; }
+
+  const updated = {
+    clientName,
+    clientPhone,
+    clientAddress:  clientAddr,
+    vehicleNumber:  (document.getElementById('os-vehicle-number')?.value||'').trim().toUpperCase(),
+    aadhaar:        (document.getElementById('os-aadhaar')?.value||'').trim(),
+    serviceType:    document.getElementById('os-service-type')?.value||'',
+    description:    document.getElementById('os-description')?.value||'',
+    totalAmount:    parseFloat(document.getElementById('os-total-fee')?.value||'0'),
+    amountPaid:     parseFloat(document.getElementById('os-amount-paid')?.value||'0'),
+    paymentMode:    document.getElementById('os-payment-mode')?.value||'Cash',
+    date:           document.getElementById('os-date')?.value||'',
+    expectedDate:   document.getElementById('os-expected-date')?.value||'',
+    form5Status:    document.getElementById('os-form5-status')?.value||'',
+    form5Date:      document.getElementById('os-form5-date')?.value||'',
+    form14Status:   document.getElementById('os-form14-status')?.value||'',
+    form14Date:     document.getElementById('os-form14-date')?.value||'',
+    formRemarks:    (document.getElementById('os-form-remarks')?.value||'').trim(),
+    updatedAt:      new Date().toISOString()
+  };
+
+  try {
+    await db.collection('otherServices').doc(id).update(updated);
+    const idx = (data.otherServices||[]).findIndex(function(s){ return (s.firebaseId||s.id)===id; });
+    if (idx >= 0) data.otherServices[idx] = Object.assign({}, data.otherServices[idx], updated);
+    document.getElementById('modal-add-other-service')?.remove();
+    showToast('Service record updated ✅');
+    renderOtherServices();
+  } catch(e) {
+    console.error('Update service error:', e);
+    alert('Error updating: ' + e.message);
+  }
+}
+
 function filterOtherServices(query) {
-  const services = (data.otherServices||[]).filter(s => (!currentSchoolId||s.schoolId===currentSchoolId) && s.clientName && s.clientName.toLowerCase().includes(query.toLowerCase()));
-  // re-render list only
-  renderOtherServices();
+  const q = (query||'').toLowerCase().trim();
+  const page = document.getElementById('page-other-services');
+  const listEl = document.getElementById('other-services-list');
+  if (!listEl) { renderOtherServices(); return; }
+
+  let services = (data.otherServices||[]).filter(function(s){ return !currentSchoolId || s.schoolId === currentSchoolId; });
+
+  if (q) {
+    services = services.filter(function(s) {
+      return (
+        (s.clientName||'').toLowerCase().includes(q) ||
+        (s.clientPhone||'').includes(q) ||
+        (s.vehicleNumber||'').toLowerCase().includes(q) ||
+        (s.aadhaar||'').includes(q) ||
+        (s.serviceType||'').toLowerCase().includes(q) ||
+        (s.clientAddress||'').toLowerCase().includes(q)
+      );
+    });
+  }
+
+  if (services.length === 0) {
+    listEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text2);">' +
+      '<div style="font-size:32px;margin-bottom:10px;">🔍</div>' +
+      '<div style="font-size:14px;">No results found for <strong>"' + query + '"</strong></div>' +
+      '<div style="font-size:12px;margin-top:6px;color:var(--text3);">Try searching by name, phone number or vehicle number.</div>' +
+    '</div>';
+    return;
+  }
+
+  const formBadge = function(label, status) {
+    if (!status) return '';
+    const col = status==='approved' ? 'background:#dcfce7;color:#15803d' : status==='submitted' ? 'background:#dbeafe;color:#1d4ed8' : 'background:#fef3c7;color:#b45309';
+    return '<span style="font-size:10px;padding:2px 5px;border-radius:4px;' + col + ';margin-right:2px;">' + label + ': ' + status + '</span>';
+  };
+
+  const rows = services.map(function(svc) {
+    const bal = (svc.totalAmount||0)-(svc.amountPaid||0);
+    const balColor = bal>0 ? 'var(--danger)' : 'var(--success)';
+    const badgeCls = bal<=0 ? 'badge-green' : 'badge-amber';
+    const badgeLabel = bal<=0 ? 'Paid' : 'Pending';
+    return '<tr>' +
+      '<td><div style="font-weight:500">' + (svc.clientName||'—') + '</div>' +
+        '<div style="font-size:11px;color:var(--text2)">' + (svc.clientPhone||'') + '</div>' +
+        (svc.vehicleNumber ? '<div style="font-size:11px;font-family:monospace;background:#f1f5f9;display:inline-block;padding:1px 5px;border-radius:3px;margin-top:2px;">' + svc.vehicleNumber + '</div>' : '') +
+      '</td>' +
+      '<td style="font-size:12px;color:var(--text2);max-width:130px;">' + (svc.clientAddress||'—') + '</td>' +
+      '<td style="font-size:12px;">' + (svc.serviceType||'—') + '</td>' +
+      '<td>' + formBadge('F5', svc.form5Status||'') + formBadge('F14', svc.form14Status||'') + ((!svc.form5Status&&!svc.form14Status)?'<span style="font-size:11px;color:var(--text2)">—</span>':'') + '</td>' +
+      '<td style="font-weight:600;">₹' + (svc.totalAmount||0).toLocaleString() + '</td>' +
+      '<td style="color:var(--success);font-weight:600;">₹' + (svc.amountPaid||0).toLocaleString() + '</td>' +
+      '<td style="color:' + balColor + ';font-weight:600;">₹' + Math.abs(bal).toLocaleString() + '</td>' +
+      '<td><span class="badge ' + badgeCls + '">' + badgeLabel + '</span></td>' +
+      '<td><div style="display:flex;gap:4px;">' +
+        '<button class="btn btn-outline btn-sm" onclick="viewOtherService(\'' + svc.id + '\')">View</button>' +
+        (currentRole === 'owner' ? '<button class="btn btn-outline btn-sm" onclick="openEditOtherService(\'' + (svc.firebaseId||svc.id) + '\')">&#9998; Edit</button>' : '') +
+        '<button class="btn btn-primary btn-sm" onclick="generateServiceInvoice(\'' + svc.id + '\')">🧾</button>' +
+      '</div></td></tr>';
+  }).join('');
+
+  listEl.innerHTML = '<table class="data-table"><thead><tr><th>Client</th><th>Address</th><th>Service</th><th>Forms</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 function openAddOtherServiceModal() {
@@ -10827,6 +12260,8 @@ function openAddOtherServiceModal() {
     <div class="form-grid">
       <div class="form-group"><label>Client Name *</label><input type="text" id="os-client-name" placeholder="Full name"></div>
       <div class="form-group"><label>Phone *</label><input type="tel" id="os-client-phone" placeholder="Phone number"></div>
+      <div class="form-group"><label>Vehicle Number</label><input type="text" id="os-vehicle-number" placeholder="e.g. TN01AB1234" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()"></div>
+      <div class="form-group"><label>Aadhaar / ID No.</label><input type="text" id="os-aadhaar" placeholder="Aadhaar or ID number"></div>
       <div class="form-group full"><label>Client Address *</label><textarea id="os-client-address" style="min-height:60px;" placeholder="Full address"></textarea></div>
       <div class="form-group"><label>Service Type *</label>
         <select id="os-service-type">
@@ -10859,6 +12294,43 @@ function openAddOtherServiceModal() {
         <strong id="os-balance-value" style="color:var(--danger);">₹0</strong>
       </div>
     </div>
+    <!-- Form 5 / Form 14 Section -->
+    <div style="margin-top:16px;padding:14px;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;">
+      <div style="font-size:13px;font-weight:600;color:#15803d;margin-bottom:12px;">📋 Government Forms</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Form 5 Status</label>
+          <select id="os-form5-status">
+            <option value="">Not Required</option>
+            <option value="pending">Pending</option>
+            <option value="submitted">Submitted</option>
+            <option value="approved">Approved</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Form 5 Submission Date</label>
+          <input type="date" id="os-form5-date">
+        </div>
+        <div class="form-group">
+          <label>Form 14 Status</label>
+          <select id="os-form14-status">
+            <option value="">Not Required</option>
+            <option value="pending">Pending</option>
+            <option value="submitted">Submitted</option>
+            <option value="approved">Approved</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Form 14 Submission Date</label>
+          <input type="date" id="os-form14-date">
+        </div>
+        <div class="form-group full">
+          <label>Form Remarks / Notes</label>
+          <input type="text" id="os-form-remarks" placeholder="Any remarks about forms, approvals, etc.">
+        </div>
+      </div>
+    </div>
+
     <!-- Installment Toggle -->
     <div style="margin-top:16px;padding:14px;background:var(--surface2);border-radius:10px;border:1px solid var(--border);">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
@@ -10909,6 +12381,8 @@ async function saveOtherService() {
   if (!clientName||!clientPhone||!clientAddress||!totalAmount) { alert('Please fill all required fields'); return; }
   const serviceData = {
     clientName, clientPhone, clientAddress,
+    vehicleNumber: document.getElementById('os-vehicle-number')?.value.trim().toUpperCase()||'',
+    aadhaar: document.getElementById('os-aadhaar')?.value.trim()||'',
     serviceType: document.getElementById('os-service-type')?.value||'',
     description: document.getElementById('os-description')?.value||'',
     totalAmount, amountPaid: initialPayment,
@@ -10919,6 +12393,11 @@ async function saveOtherService() {
     numInstallments: parseInt(document.getElementById('os-num-inst')?.value||'0'),
     installmentFreq: document.getElementById('os-inst-freq')?.value||'Monthly',
     installments: initialPayment>0?[{date:document.getElementById('os-date')?.value||new Date().toISOString().split('T')[0],amount:initialPayment,mode:document.getElementById('os-payment-mode')?.value||'Cash',note:'Initial payment'}]:[],
+    form5Status: document.getElementById('os-form5-status')?.value||'',
+    form5Date: document.getElementById('os-form5-date')?.value||'',
+    form14Status: document.getElementById('os-form14-status')?.value||'',
+    form14Date: document.getElementById('os-form14-date')?.value||'',
+    formRemarks: document.getElementById('os-form-remarks')?.value.trim()||'',
     schoolId: currentSchoolId,
     // Include ownerId and ownerEmail so Firestore isOwner() rule passes
     ...FirebaseService.getOwnerScope(currentSchoolId),
@@ -10966,23 +12445,34 @@ function viewOtherService(id) {
       <h3>🔧 ${svc.clientName}</h3>
       <button class="modal-close" onclick="document.getElementById('modal-view-other-service').remove()">✕</button>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
       <div style="background:var(--surface2);border-radius:10px;padding:14px 16px;">
         <div style="font-size:11px;color:var(--text2);margin-bottom:8px;">CLIENT INFO</div>
-        <div style="font-size:13px;line-height:2;">
+        <div style="font-size:13px;line-height:2.1;">
           <span style="color:var(--text2);">Phone:</span> <strong>${svc.clientPhone||'—'}</strong><br>
-          <span style="color:var(--text2);">Address:</span> <strong>${svc.clientAddress||'—'}</strong>
+          <span style="color:var(--text2);">Address:</span> <strong>${svc.clientAddress||'—'}</strong><br>
+          ${svc.vehicleNumber?`<span style="color:var(--text2);">Vehicle No:</span> <strong style="font-family:monospace;background:#f1f5f9;padding:1px 6px;border-radius:4px;">${svc.vehicleNumber}</strong><br>`:''}
+          ${svc.aadhaar?`<span style="color:var(--text2);">Aadhaar/ID:</span> <strong>${svc.aadhaar}</strong><br>`:''}
         </div>
       </div>
       <div style="background:var(--surface2);border-radius:10px;padding:14px 16px;">
         <div style="font-size:11px;color:var(--text2);margin-bottom:8px;">SERVICE INFO</div>
-        <div style="font-size:13px;line-height:2;">
+        <div style="font-size:13px;line-height:2.1;">
           <span style="color:var(--text2);">Type:</span> <strong>${svc.serviceType||'—'}</strong><br>
           <span style="color:var(--text2);">Date:</span> <strong>${svc.date||'—'}</strong><br>
           <span style="color:var(--text2);">Expected:</span> <strong>${svc.expectedDate||'—'}</strong>
         </div>
       </div>
     </div>
+    ${(svc.form5Status||svc.form14Status) ? `
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:600;color:#15803d;margin-bottom:10px;">📋 GOVERNMENT FORMS</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;">
+        ${svc.form5Status ? `<div><span style="color:#15803d;">Form 5:</span> <strong>${svc.form5Status}</strong>${svc.form5Date?' — '+svc.form5Date:''}</div>` : ''}
+        ${svc.form14Status ? `<div><span style="color:#15803d;">Form 14:</span> <strong>${svc.form14Status}</strong>${svc.form14Date?' — '+svc.form14Date:''}</div>` : ''}
+        ${svc.formRemarks ? `<div style="grid-column:1/-1;color:var(--text2);font-size:12px;">📝 ${svc.formRemarks}</div>` : ''}
+      </div>
+    </div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
       <div style="background:var(--surface2);border-radius:8px;padding:12px;text-align:center;">
         <div style="font-size:11px;color:var(--text2);">Total Amount</div>
@@ -11025,7 +12515,9 @@ function viewOtherService(id) {
         <button class="btn btn-outline btn-sm" onclick="document.getElementById('service-install-form-${svc.id}').style.display='none'">Cancel</button>
       </div>
     </div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;">
+    <div style="display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap;">
+      ${currentRole==='owner' ? `<button class="btn btn-accent" onclick="openEditOtherService('${svc.id||svc.firebaseId}');document.getElementById('modal-view-other-service').remove()">✏️ Edit</button>` : ''}
+      <button class="btn btn-outline" onclick="printForm15ForService('${svc.id||svc.firebaseId}')">🖨️ Form 15</button>
       <button class="btn btn-primary" onclick="generateServiceInvoice('${svc.id}')">🧾 Invoice</button>
       <button class="btn btn-outline" onclick="document.getElementById('modal-view-other-service').remove()">Close</button>
     </div>
@@ -11067,7 +12559,7 @@ function generateServiceInvoice(id) {
   const bal = (svc.totalAmount||0)-(svc.amountPaid||0);
   const invoiceNo = 'SINV-' + (id||'').toString().slice(-6).toUpperCase();
   const today = new Date().toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
-  const schoolName = (userSchools.find(sc=>sc.id===currentSchoolId)||{}).name||'DrivePro School';
+  const schoolName = (userSchools.find(sc=>sc.id===currentSchoolId)||{}).name||'First Gear School';
   const old = document.getElementById('modal-service-invoice');
   if (old) old.remove();
   const modal = document.createElement('div');
@@ -11118,7 +12610,7 @@ function generateServiceInvoice(id) {
       <table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="background:var(--surface2);"><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Amount</th><th style="padding:8px 12px;text-align:left;">Mode</th></tr></thead><tbody>
       ${(svc.installments||[]).map(i=>`<tr style="border-bottom:1px solid var(--border);"><td style="padding:8px 12px;">${i.date}</td><td style="padding:8px 12px;color:var(--success);font-weight:600;">₹${(i.amount||0).toLocaleString()}</td><td style="padding:8px 12px;">${i.mode||'Cash'}</td></tr>`).join('')}
       </tbody></table></div>`:''}
-      <div style="border-top:1px solid var(--border);padding-top:14px;text-align:center;font-size:11px;color:var(--text2);">Generated by DrivePro • ${today}</div>
+      <div style="border-top:1px solid var(--border);padding-top:14px;text-align:center;font-size:11px;color:var(--text2);">Generated by First Gear • ${today}</div>
     </div>
   </div>`;
   modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
@@ -11291,7 +12783,7 @@ function sendDailyIncomeExpenseSummary() {
   showToast(msg.substring(0, 80));
   // Also try browser notification
   if ('Notification' in window && Notification.permission === 'granted') {
-    new Notification('DrivePro Daily Summary', {
+    new Notification('First Gear Daily Summary', {
       body: `Income: ₹${totalIncome.toLocaleString()} | Expense: ₹${totalExpense.toLocaleString()} | Net: ₹${profit.toLocaleString()}`,
       icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="75" font-size="75">🚗</text></svg>'
     });
@@ -11357,7 +12849,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 <script>
 // ADMIN MODULE
-// DrivePro admin and staff management code.
+// First Gear admin and staff management code.
 // ADMIN MANAGEMENT
 // ============================================================
 
@@ -12734,7 +14226,876 @@ async function populateStaffSchoolDropdown() {
 
 // ============================================================
 
+
+// ═══════════════════════════════════════════════════════════════════
+//  DATA IMPORT — Excel / CSV → Firebase
+// ═══════════════════════════════════════════════════════════════════
+
+// SheetJS loaded from CDN (lazy, only when needed)
+let _sheetJSLoaded = false;
+function _loadSheetJS(cb) {
+  if (_sheetJSLoaded || (typeof XLSX !== 'undefined')) { _sheetJSLoaded=true; cb(); return; }
+  var s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  s.onload = function(){ _sheetJSLoaded=true; cb(); };
+  s.onerror = function(){ alert('Could not load Excel library. Please check your internet connection.'); };
+  document.head.appendChild(s);
+}
+
+// ── Column name aliases ─────────────────────────────────────────────
+// Maps every possible column header variant → canonical field name
+const STUDENT_ALIASES = {
+  // name
+  'name':1,'full name':1,'student name':1,'candidate name':1,'studentname':1,'fullname':1,
+  // phone
+  'phone':1,'mobile':1,'phone number':1,'mobile number':1,'contact':1,'contact number':1,
+  // dob
+  'dob':1,'date of birth':1,'birth date':1,'birthdate':1,
+  // email
+  'email':1,'email address':1,'emailaddress':1,
+  // address
+  'address':1,'full address':1,
+  // aadhaar
+  'aadhaar':1,'aadhar':1,'aadhaar number':1,'aadhar number':1,'uid':1,
+  // vehicle
+  'vehicle':1,'vehicle type':1,'vehicletype':1,'course':1,'license type':1,
+  // instructor
+  'instructor':1,'teacher':1,'trainer':1,'assigned instructor':1,
+  // fee
+  'fee':1,'total fee':1,'totalfee':1,'course fee':1,'fees':1,'amount':1,
+  // paid
+  'paid':1,'fee paid':1,'feepaid':1,'paid amount':1,'amount paid':1,
+  // enrolled / enrollment date
+  'enrolled':1,'enrollment date':1,'enrolldate':1,'enroll date':1,'joining date':1,'start date':1,'date':1,
+  // status
+  'status':1,
+  // classes
+  'classes':1,'classes done':1,'completed classes':1,'class count':1,
+  'total classes':1,'totalclasses':1,
+  // emergency
+  'emergency':1,'emergency contact':1,'emergency phone':1,
+};
+
+const TX_ALIASES = {
+  'date':1,'transaction date':1,
+  'type':1,'transaction type':1,
+  'category':1,'cat':1,
+  'description':1,'desc':1,'details':1,'narration':1,'particulars':1,'note':1,'notes':1,
+  'amount':1,'amt':1,'value':1,'rs':1,'inr':1,
+};
+
+function _normalise(header) {
+  return String(header).toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
+}
+
+// Map raw row object (keys = original headers) → canonical student object
+function _mapStudentRow(raw) {
+  const out = {};
+  Object.keys(raw).forEach(function(k){
+    const n = _normalise(k);
+    const v = raw[k] === null || raw[k] === undefined ? '' : String(raw[k]).trim();
+    if (!v || v === 'NaN') return;
+    // Name
+    if (['name','full name','student name','candidate name','studentname','fullname','trainee name','name of the trainee','name of trainee'].includes(n)) out.name = v;
+    // Phone
+    else if (['phone','mobile','phone number','mobile number','contact','contact number','student phone','student phone no','mob','mobile no'].includes(n)) out.phone = v;
+    // DOB
+    else if (['dob','date of birth','birth date','birthdate'].includes(n)) out.dob = _toDateStr(v);
+    // Email
+    else if (['email','email address','emailaddress'].includes(n)) out.email = v;
+    // Address
+    else if (['address','full address'].includes(n)) out.address = v;
+    // Aadhaar
+    else if (['aadhaar','aadhar','aadhaar number','aadhar number','uid'].includes(n)) out.aadhaar = v;
+    // Vehicle / Class of vehicle
+    else if (['vehicle','vehicle type','vehicletype','course','license type','class of vehicle','vehicle class','class'].includes(n)) out.vehicle = v;
+    // Instructor / Driver
+    else if (['instructor','teacher','trainer','assigned instructor','driver','driver name','others'].includes(n)) out.instructor = v;
+    // Card number / Code
+    else if (['card','card no','code no','code number','enrolment no','enrollment no','sl no','sl'].includes(n)) out.codeNo = v;
+    // Individual payment columns — accumulate into paid
+    else if (/^[1-9](st|nd|rd|th) paid amount$/i.test(k.trim()) || ['1st paid amount','2nd paid amount','3rd paid amount','4th paid amount'].includes(n)) {
+      out.paid = (out.paid||0) + (parseInt(String(v).replace(/[^0-9]/g,''))||0);
+    }
+    // Assign group
+    else if (['assign','group','batch'].includes(n)) out.assign = v;
+    // Total fee - check various column names including "fixed total amount"
+    else if (['fee','total fee','totalfee','course fee','fees','fixed total amount','total amount','amount'].includes(n) && !['amount paid','paid amount','1st paid amount','2nd paid amount','3rd paid amount','4th paid amount','total paid amount'].includes(n)) out.totalFee = parseInt(String(v).replace(/[^0-9]/g,''))||0;
+    // Paid amount - "total paid amount" from excel
+    else if (['paid','fee paid','feepaid','paid amount','amount paid','total paid amount','total paid'].includes(n)) out.paid = parseInt(String(v).replace(/[^0-9]/g,''))||0;
+    // Enrolled date
+    else if (['enrolled','enrollment date','enrolldate','enroll date','joining date','start date','date of enrolment','date of enrollment','enrolment date'].includes(n)) out.enrolled = _toDateStr(v);
+    // Status
+    else if (n==='status') out.status = v;
+    // Classes done
+    else if (['classes','classes done','completed classes','class count','ll','dl'].includes(n)) out.classes = parseInt(v)||0;
+    // Total classes
+    else if (['total classes','totalclasses','total class'].includes(n)) out.totalClasses = parseInt(v)||0;
+    // Emergency
+    else if (['emergency','emergency contact','emergency phone'].includes(n)) out.emergency = v;
+    // Month / batch info stored as note
+    else if (['month of year','month','year','batch month'].includes(n)) out.batchMonth = v;
+  });
+  // If TOTAL PAID AMOUNT is present and was set, it takes priority over summed individual payments
+  // (already handled by natural column order — TOTAL PAID AMOUNT comes first in the Excel,
+  //  but individual amounts come after so may overwrite it. Fix: track if total was explicitly set)
+  // This is resolved by the fact that individual amounts accumulate with += while total uses = 
+  // so if total paid amount col was processed, individual amounts ADD to it (could be double-counted)
+  // Fix: re-process to handle this properly — if 'total paid amount' key exists, use it directly
+  Object.keys(raw).forEach(function(k){
+    const n = _normalise(k);
+    const v = raw[k] === null || raw[k] === undefined ? '' : String(raw[k]).trim();
+    if (!v || v === 'NaN') return;
+    if (['total paid amount','total paid'].includes(n)) {
+      const totalPaid = parseInt(String(v).replace(/[^0-9]/g,''))||0;
+      if (totalPaid > 0) out.paid = totalPaid; // override with definitive total
+    }
+  });
+
+  // Fallback: if no phone found but "contact" key present with a number
+  if (!out.phone) {
+    Object.keys(raw).forEach(function(k){
+      const n = _normalise(k);
+      const v = raw[k] === null || raw[k] === undefined ? '' : String(raw[k]).trim();
+      if (!v || v === 'NaN') return;
+      if (n.includes('contact') || n.includes('phone') || n.includes('mobile') || n.includes('mob')) {
+        if (/\d{6,}/.test(v)) out.phone = v;
+      }
+    });
+  }
+  return out;
+}
+
+function _mapTxRow(raw) {
+  const out = {};
+  Object.keys(raw).forEach(function(k){
+    const n = _normalise(k);
+    const v = raw[k] === null || raw[k] === undefined ? '' : String(raw[k]).trim();
+    if (!v) return;
+    if (['date','transaction date'].includes(n)) out.date = _toDateStr(v);
+    else if (['type','transaction type'].includes(n)) out.type = v.toLowerCase().includes('exp') ? 'expense' : 'income';
+    else if (['category','cat'].includes(n)) out.category = v;
+    else if (['description','desc','details','narration','particulars','note','notes'].includes(n)) out.desc = v;
+    else if (['amount','amt','value','rs','inr'].includes(n)) out.amount = parseFloat(v.replace(/[^0-9.]/g,''))||0;
+  });
+  return out;
+}
+
+// Convert various date formats → YYYY-MM-DD
+function _toDateStr(v) {
+  if (!v) return '';
+  v = String(v).trim();
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10);
+  // DD/MM/YYYY or DD-MM-YYYY
+  var m = v.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/);
+  if (m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+  // MM/DD/YYYY
+  var m2 = v.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+  if (m2) {
+    var yr = m2[3].length===2 ? '20'+m2[3] : m2[3];
+    return yr+'-'+m2[1].padStart(2,'0')+'-'+m2[2].padStart(2,'0');
+  }
+  // Excel serial date number
+  if (/^\d+$/.test(v)) {
+    var d = new Date(Math.round((parseInt(v)-25569)*86400000));
+    if (!isNaN(d)) return d.toISOString().slice(0,10);
+  }
+  return v;
+}
+
+// Parse file (Excel or CSV) → array of sheet objects { name, rows:[] }
+function _parseFile(file, cb) {
+  _loadSheetJS(function(){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try {
+        var data = new Uint8Array(e.target.result);
+        var wb = XLSX.read(data, {type:'array', cellDates:true});
+        var sheets = wb.SheetNames.map(function(sn){
+          var ws  = wb.Sheets[sn];
+          var rows = XLSX.utils.sheet_to_json(ws, {defval:''});
+          return { name: sn, rows: rows };
+        });
+        cb(null, sheets);
+      } catch(err) { cb(err, null); }
+    };
+    reader.onerror = function(){ cb(new Error('File read error'), null); };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Detect what type of data a sheet likely contains
+function _detectSheetType(sheet) {
+  if (!sheet.rows.length) return 'unknown';
+  var keys = Object.keys(sheet.rows[0]).map(function(k){ return _normalise(k); });
+  var studentScore = 0, txScore = 0;
+  keys.forEach(function(k){
+    // Standard student columns
+    if (['name','phone','mobile','dob','aadhaar','vehicle','instructor','fee','paid'].includes(k)) studentScore += 2;
+    // Driving-school specific column names (from Maruthi/FirstGear Excel format)
+    if (k.includes('candidate') || k.includes('trainee') || k.includes('enrol') || k.includes('enroll')) studentScore += 2;
+    if (k.includes('class of vehicle') || k.includes('vehicle class') || k === 'class of vehicle') studentScore += 2;
+    if (k.includes('code no') || k.includes('sl no') || k.includes('total classes') || k.includes('assign')) studentScore++;
+    if (k.includes('contact') && !k.includes('emergency')) studentScore++;
+    if (k.includes('fixed total') || k.includes('total paid') || k.includes('1st paid') || k.includes('2nd paid')) studentScore += 2;
+    if (k.includes('driver name') || k.includes('allotted time') || k.includes('vehicle') && !k.includes('number')) studentScore++;
+    // Transaction columns
+    if (['type','transaction type','category','amount','amt'].includes(k)) txScore++;
+    if (['date','description','desc','narration'].includes(k)) txScore += 0.5;
+    if (k.includes('expense') || k.includes('income') || k.includes('debit') || k.includes('credit')) txScore += 2;
+  });
+  var name = _normalise(sheet.name);
+  if (name.includes('student') || name.includes('enroll') || name.includes('trainee') || name.includes('f26') || name.includes('f25') || name.includes('f27') || name.includes('sheet')) studentScore += 2;
+  if (name.includes('transaction') || name.includes('payment') || name.includes('cash') ||
+      name.includes('income') || name.includes('expense') || name.includes('fee')) txScore += 3;
+  if (studentScore === 0 && txScore === 0) return 'unknown';
+  return studentScore >= txScore ? 'students' : 'transactions';
+}
+
+// ── Render the import page ─────────────────────────────────────────
+function renderImportPage() {
+  var el = document.getElementById('import-page-content');
+  if (!el) return;
+
+  el.innerHTML =
+    '<div class="page-header">' +
+      '<div><h2>📥 Import Data</h2>' +
+      '<p>Upload your Excel (.xlsx) or CSV file to import students, transactions, or both</p></div>' +
+    '</div>' +
+
+    // How it works
+    '<div class="card" style="background:linear-gradient(135deg,#eff6ff,#f0fdf4);border:1px solid #bfdbfe;margin-bottom:18px;">' +
+      '<div class="card-title" style="margin-bottom:12px;">ℹ️ How It Works</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;font-size:13px;">' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+          '<div style="font-size:22px;line-height:1;">1️⃣</div>' +
+          '<div><strong>Upload your file</strong><br><span style="color:var(--text2);">Excel (.xlsx, .xls) or CSV — any column names work</span></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+          '<div style="font-size:22px;line-height:1;">2️⃣</div>' +
+          '<div><strong>Auto-detect & preview</strong><br><span style="color:var(--text2);">The app reads your columns and maps them to the right fields</span></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+          '<div style="font-size:22px;line-height:1;">3️⃣</div>' +
+          '<div><strong>Review then import</strong><br><span style="color:var(--text2);">See a preview, fix any issues, then click Import to save everything</span></div>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    // Download template
+    '<div class="card" style="margin-bottom:18px;">' +
+      '<div class="card-title">📋 Download Templates</div>' +
+      '<p style="font-size:13px;color:var(--text2);margin-bottom:14px;">Use these templates to prepare your data — or just upload your own file with any column names.</p>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+        '<button class="btn btn-outline" onclick="downloadTemplate(\'students\')">⬇ Students Template (.csv)</button>' +
+        '<button class="btn btn-outline" onclick="downloadTemplate(\'transactions\')">⬇ Transactions Template (.csv)</button>' +
+      '</div>' +
+    '</div>' +
+
+    // Upload area
+    '<div class="card" id="import-upload-card">' +
+      '<div class="card-title">📂 Upload Your File</div>' +
+      '<div id="import-drop-zone" onclick="document.getElementById(\'import-file-input\').click()" ' +
+        'ondragover="event.preventDefault();this.style.borderColor=\'var(--accent2)\'" ' +
+        'ondragleave="this.style.borderColor=\'var(--border)\'" ' +
+        'ondrop="event.preventDefault();handleImportDrop(event)" ' +
+        'style="border:2px dashed var(--border);border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:all .2s;background:var(--surface2);">' +
+        '<div style="font-size:40px;margin-bottom:10px;">📊</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px;">Drop your Excel / CSV file here</div>' +
+        '<div style="font-size:12px;color:var(--text2);margin-bottom:14px;">Supports .xlsx · .xls · .csv</div>' +
+        '<button class="btn btn-accent" onclick="event.stopPropagation();document.getElementById(\'import-file-input\').click()">Choose File</button>' +
+      '</div>' +
+      '<input type="file" id="import-file-input" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFileSelect(event)">' +
+    '</div>' +
+
+    // Preview area (hidden initially)
+    '<div id="import-preview-area"></div>';
+}
+
+function downloadTemplate(type) {
+  var rows, filename;
+  if (type === 'students') {
+    rows = [
+      ['Name','Phone','Date of Birth','Email','Address','Aadhaar Number','Vehicle Type','Instructor','Total Fee','Fee Paid','Enrollment Date','Status','Classes Done','Total Classes','Emergency Contact'],
+      ['Ravi Kumar','9876543210','15/06/1998','ravi@email.com','123 MG Road Bengaluru','1234 5678 9012','4-Wheeler (LMV)','Instructor Name','7000','3500','01/01/2024','Active','12','27','9876500000'],
+      ['Priya Sharma','9123456780','22/03/2000','','HSR Layout','','2-Wheeler (Gear)','','5000','5000','15/02/2024','Completed','27','27',''],
+    ];
+    filename = 'Students_Template.csv';
+  } else {
+    rows = [
+      ['Date','Type','Category','Description','Amount'],
+      ['01/01/2024','income','Student Fee','Fee from Ravi Kumar','3500'],
+      ['05/01/2024','expense','Petrol','Fuel for KA01AB1234','800'],
+      ['10/01/2024','income','Other Service','DL Application fee','500'],
+    ];
+    filename = 'Transactions_Template.csv';
+  }
+  var csv = '\uFEFF' + rows.map(function(r){ return r.map(function(c){ return '"'+String(c).replace(/"/g,'""')+'"'; }).join(','); }).join('\r\n');
+  var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
+function handleImportDrop(e) {
+  document.getElementById('import-drop-zone').style.borderColor = 'var(--border)';
+  var file = e.dataTransfer.files[0];
+  if (file) processImportFile(file);
+}
+
+function handleImportFileSelect(e) {
+  var file = e.target.files[0];
+  if (file) processImportFile(file);
+  e.target.value = '';
+}
+
+function processImportFile(file) {
+  var preview = document.getElementById('import-preview-area');
+  preview.innerHTML = '<div class="card"><div style="text-align:center;padding:30px;color:var(--text2);">⏳ Reading file...</div></div>';
+
+  _parseFile(file, function(err, sheets){
+    if (err) {
+      preview.innerHTML = '<div class="card"><div style="color:var(--danger);padding:16px;">❌ Could not read file: '+err.message+'</div></div>';
+      return;
+    }
+    if (!sheets || !sheets.length) {
+      preview.innerHTML = '<div class="card"><div style="color:var(--danger);padding:16px;">❌ File appears to be empty.</div></div>';
+      return;
+    }
+    renderImportPreview(sheets, file.name);
+  });
+}
+
+function renderImportPreview(sheets, fileName) {
+  var preview = document.getElementById('import-preview-area');
+
+  // Analyse each sheet
+  var analyses = sheets.map(function(sheet){
+    var type = _detectSheetType(sheet);
+    var mapped = [];
+    var skipped = [];
+    if (type === 'students') {
+      sheet.rows.forEach(function(row, i){
+        var s = _mapStudentRow(row);
+        if (s.name) {
+          s.schoolId = currentSchoolId;
+          s.status = s.status || 'Active';
+          s.classes = s.classes || 0;
+          s.totalClasses = s.totalClasses || 27;
+          s.totalFee = s.totalFee || 0;
+          s.paid = s.paid || 0;
+          s.enrolled = s.enrolled || new Date().toISOString().slice(0,10);
+          if (!s.phone) s.phone = '—'; // phone optional
+          mapped.push(s);
+        } else {
+          skipped.push({row:i+2, reason: 'Missing Name — row cannot be imported'});
+        }
+      });
+    } else if (type === 'transactions') {
+      sheet.rows.forEach(function(row, i){
+        var t = _mapTxRow(row);
+        if (t.amount && t.amount > 0) {
+          t.schoolId = currentSchoolId;
+          t.type = t.type || 'income';
+          t.date = t.date || new Date().toISOString().slice(0,10);
+          t.category = t.category || (t.type==='income'?'Student Fee':'Expense');
+          t.desc = t.desc || t.category;
+          mapped.push(t);
+        } else {
+          skipped.push({row:i+2, reason:'Missing or zero Amount'});
+        }
+      });
+    }
+    return { sheet, type, mapped, skipped };
+  });
+
+  var html = '<div class="card" style="margin-bottom:0;">' +
+    '<div class="card-title">🔍 Preview — ' + fileName + '</div>';
+
+  analyses.forEach(function(a, ai){
+    var typeColor = a.type==='students'?'#15803d':a.type==='transactions'?'#1d4ed8':'#64748b';
+    var typeBg    = a.type==='students'?'#f0fdf4':a.type==='transactions'?'#eff6ff':'#f1f5f9';
+    var typeLabel = a.type==='students'?'👤 Students':a.type==='transactions'?'💰 Transactions':'❓ Unknown';
+
+    html += '<div style="margin-bottom:24px;">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">' +
+      '<div style="display:flex;align-items:center;gap:10px;">' +
+        '<span style="font-weight:700;font-size:14px;">Sheet: ' + a.sheet.name + '</span>' +
+        '<span style="padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:'+typeBg+';color:'+typeColor+';">' + typeLabel + '</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;font-size:12px;">' +
+        '<span style="background:#dcfce7;color:#15803d;padding:3px 10px;border-radius:20px;font-weight:600;">✓ ' + a.mapped.length + ' will import</span>' +
+        (a.skipped.length ? '<span style="background:#fef3c7;color:#b45309;padding:3px 10px;border-radius:20px;font-weight:600;">⚠ ' + a.skipped.length + ' skipped</span>' : '') +
+      '</div>' +
+    '</div>';
+
+    // Override type selector
+    html += '<div style="margin-bottom:10px;font-size:12px;color:var(--text2);">Data type detected automatically. Override if wrong: ' +
+      '<select id="sheet-type-'+ai+'" onchange="updateSheetType('+ai+',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;">' +
+        '<option value="students"'+(a.type==='students'?' selected':'')+'>Students</option>' +
+        '<option value="transactions"'+(a.type==='transactions'?' selected':'')+'>Transactions</option>' +
+        '<option value="skip"'+(a.type==='unknown'?' selected':'')+'>Skip this sheet</option>' +
+      '</select>' +
+    '</div>';
+
+    if (a.type === 'unknown' || a.mapped.length === 0) {
+      html += '<div style="padding:16px;background:#fef3c7;border-radius:8px;font-size:13px;color:#b45309;">' +
+        (a.type==='unknown'
+          ? '⚠ Could not detect data type. Please select manually above or ensure your columns have recognisable headers.'
+          : '⚠ No valid rows found. Check that Name + Phone (students) or Amount (transactions) columns are present.') +
+      '</div>';
+    } else {
+      // Preview table — first 5 rows
+      var previewRows = a.mapped.slice(0,5);
+      var cols = a.type==='students'
+        ? ['name','phone','vehicle','instructor','totalFee','paid','enrolled','status']
+        : ['date','type','category','desc','amount'];
+      var colLabels = a.type==='students'
+        ? ['Name','Phone','Vehicle','Instructor','Total Fee','Paid','Enrolled','Status']
+        : ['Date','Type','Category','Description','Amount'];
+
+      html += '<div style="overflow-x:auto;">' +
+        '<table class="data-table" style="font-size:12px;">' +
+          '<thead><tr>' + colLabels.map(function(l){ return '<th>'+l+'</th>'; }).join('') + '</tr></thead>' +
+          '<tbody>' +
+          previewRows.map(function(r){
+            return '<tr>' + cols.map(function(c){
+              var v = r[c] === undefined ? '—' : r[c];
+              if (c==='type') {
+                var bc = v==='income'?'badge-green':'badge-red';
+                return '<td><span class="badge '+bc+'">'+v+'</span></td>';
+              }
+              if (c==='status') {
+                var bc2 = v==='Active'?'badge-green':v==='Completed'?'badge-blue':'badge-gray';
+                return '<td><span class="badge '+bc2+'">'+v+'</span></td>';
+              }
+              if ((c==='totalFee'||c==='paid'||c==='amount') && v!=='—') return '<td style="font-weight:500;">₹'+Number(v).toLocaleString()+'</td>';
+              return '<td>'+v+'</td>';
+            }).join('') + '</tr>';
+          }).join('') +
+          (a.mapped.length > 5 ? '<tr><td colspan="'+cols.length+'" style="text-align:center;padding:8px;color:var(--text2);font-style:italic;">... and '+( a.mapped.length-5)+' more rows</td></tr>' : '') +
+          '</tbody></table>' +
+        '</div>';
+
+      if (a.skipped.length) {
+        html += '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#b45309;">⚠ ' + a.skipped.length + ' rows will be skipped (click to see why)</summary>' +
+          '<div style="margin-top:6px;font-size:11px;color:var(--text2);">' +
+          a.skipped.slice(0,10).map(function(sk){ return 'Row '+sk.row+': '+sk.reason; }).join('<br>') +
+          (a.skipped.length>10?'<br>...and '+(a.skipped.length-10)+' more':'') +
+          '</div></details>';
+      }
+    }
+
+    html += '</div>'; // end sheet block
+  });
+
+  // Store analyses for import step
+  window._importAnalyses = analyses;
+  window._importFileName = fileName;
+
+  var hasAny = analyses.some(function(a){ return a.type!=='unknown' && a.mapped.length>0; });
+
+  html += '<div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+    (hasAny
+      ? '<button class="btn btn-accent" style="font-size:15px;padding:12px 28px;" onclick="startImport()">⬆ Import All Valid Rows</button>'
+      : '') +
+    '<button class="btn btn-outline" onclick="renderImportPage()">↩ Upload Different File</button>' +
+  '</div>';
+
+  html += '</div>'; // card
+  preview.innerHTML = html;
+}
+
+function updateSheetType(idx, newType) {
+  if (!window._importAnalyses) return;
+  var a = window._importAnalyses[idx];
+  a.type = newType;
+  a.mapped = [];
+  a.skipped = [];
+  if (newType === 'students') {
+    a.sheet.rows.forEach(function(row, i){
+      var s = _mapStudentRow(row);
+      if (s.name) {
+        s.schoolId = currentSchoolId; s.status=s.status||'Active';
+        s.classes=s.classes||0; s.totalClasses=s.totalClasses||27;
+        s.totalFee=s.totalFee||0; s.paid=s.paid||0;
+        s.enrolled=s.enrolled||new Date().toISOString().slice(0,10);
+        if (!s.phone) s.phone = '—';
+        a.mapped.push(s);
+      } else { a.skipped.push({row:i+2,reason:'Missing Name'}); }
+    });
+  } else if (newType === 'transactions') {
+    a.sheet.rows.forEach(function(row, i){
+      var t = _mapTxRow(row);
+      if (t.amount && t.amount > 0) {
+        t.schoolId=currentSchoolId; t.type=t.type||'income';
+        t.date=t.date||new Date().toISOString().slice(0,10);
+        t.category=t.category||(t.type==='income'?'Student Fee':'Expense');
+        t.desc=t.desc||t.category;
+        a.mapped.push(t);
+      } else { a.skipped.push({row:i+2,reason:'Missing or zero Amount'}); }
+    });
+  }
+  renderImportPreview(a.sheet ? [{rows:a.sheet.rows,name:a.sheet.name}] : [], window._importFileName);
+  // Re-render full preview with updated analyses
+  renderImportPreviewFromAnalyses();
+}
+
+function renderImportPreviewFromAnalyses() {
+  // Fake a re-render by calling renderImportPreview with the stored data
+  if (window._importAnalyses) {
+    var fakeSheets = window._importAnalyses.map(function(a){ return a.sheet; });
+    renderImportPreview(fakeSheets, window._importFileName || 'file');
+  }
+}
+
+async function startImport() {
+  var analyses = window._importAnalyses;
+  if (!analyses) return;
+
+  if (!currentSchoolId) {
+    alert('Please select a school before importing.');
+    return;
+  }
+
+  var totalStudents = 0, totalTx = 0, errors = [];
+
+  // Progress UI
+  var preview = document.getElementById('import-preview-area');
+  preview.innerHTML = '<div class="card"><div id="import-progress" style="text-align:center;padding:30px;">' +
+    '<div style="font-size:32px;margin-bottom:12px;">⏳</div>' +
+    '<div style="font-size:16px;font-weight:600;margin-bottom:8px;" id="import-progress-msg">Starting import...</div>' +
+    '<div style="background:var(--surface2);border-radius:8px;height:8px;width:100%;margin:0 auto;max-width:400px;">' +
+      '<div id="import-progress-bar" style="height:8px;border-radius:8px;background:var(--accent);width:0%;transition:width .3s;"></div>' +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--text2);margin-top:8px;" id="import-progress-sub"></div>' +
+  '</div></div>';
+
+  function setProgress(pct, msg, sub) {
+    var bar = document.getElementById('import-progress-bar');
+    var msgEl = document.getElementById('import-progress-msg');
+    var subEl = document.getElementById('import-progress-sub');
+    if (bar) bar.style.width = pct+'%';
+    if (msgEl) msgEl.textContent = msg;
+    if (subEl) subEl.textContent = sub || '';
+  }
+
+  var allStudents = [], allTx = [];
+  analyses.forEach(function(a){
+    if (a.type === 'students') allStudents = allStudents.concat(a.mapped);
+    else if (a.type === 'transactions') allTx = allTx.concat(a.mapped);
+  });
+
+  var total = allStudents.length + allTx.length;
+  var done = 0;
+
+  // Import students in batches of 10
+  for (var i = 0; i < allStudents.length; i++) {
+    try {
+      setProgress(Math.round((done/total)*100), 'Importing students...', (i+1)+' of '+allStudents.length);
+      var s = Object.assign({}, allStudents[i], FirebaseService.getOwnerScope());
+      var docRef = await FirebaseService.addStudent(s);
+      var newId = (docRef && docRef.id) ? docRef.id : ('imp_s_'+Date.now()+'_'+i);
+      if (!data.students) data.students = [];
+      data.students.unshift(Object.assign({}, s, {firebaseId: newId, id: newId}));
+      totalStudents++;
+    } catch(e) {
+      errors.push('Student row '+(i+1)+': '+e.message);
+    }
+    done++;
+    // Small delay every 10 to avoid Firebase rate limits
+    if (i>0 && i%10===0) await new Promise(function(r){ setTimeout(r,200); });
+  }
+
+  // Import transactions in batches of 10
+  for (var j = 0; j < allTx.length; j++) {
+    try {
+      setProgress(Math.round((done/total)*100), 'Importing transactions...', (j+1)+' of '+allTx.length);
+      var t = allTx[j];
+      var docRef2 = await FirebaseService.addTransaction(t);
+      var txId = (docRef2 && docRef2.id) ? docRef2.id : ('imp_t_'+Date.now()+'_'+j);
+      if (!data.transactions) data.transactions = [];
+      data.transactions.unshift(Object.assign({}, t, {firebaseId: txId, id: txId}));
+      totalTx++;
+    } catch(e) {
+      errors.push('Transaction row '+(j+1)+': '+e.message);
+    }
+    done++;
+    if (j>0 && j%10===0) await new Promise(function(r){ setTimeout(r,200); });
+  }
+
+  setProgress(100, 'Import complete!', '');
+
+  // Show results
+  setTimeout(function(){
+    preview.innerHTML = '<div class="card">' +
+      '<div style="text-align:center;padding:16px 0 24px;">' +
+        '<div style="font-size:48px;margin-bottom:10px;">' + (errors.length===0?'🎉':'⚠️') + '</div>' +
+        '<div style="font-size:20px;font-weight:700;font-family:Syne,sans-serif;margin-bottom:6px;">' +
+          (errors.length===0 ? 'Import Successful!' : 'Import Completed with Warnings') +
+        '</div>' +
+        '<div style="color:var(--text2);font-size:13px;margin-bottom:20px;">' +
+          (window._importFileName||'Your file') + ' has been imported' +
+        '</div>' +
+        '<div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin-bottom:20px;">' +
+          '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 20px;min-width:130px;">' +
+            '<div style="font-size:28px;font-weight:700;color:var(--success);">'+totalStudents+'</div>' +
+            '<div style="font-size:12px;color:#15803d;font-weight:600;">Students Imported</div>' +
+          '</div>' +
+          '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 20px;min-width:130px;">' +
+            '<div style="font-size:28px;font-weight:700;color:var(--accent2);">'+totalTx+'</div>' +
+            '<div style="font-size:12px;color:#1d4ed8;font-weight:600;">Transactions Imported</div>' +
+          '</div>' +
+          (errors.length ? '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 20px;min-width:130px;">' +
+            '<div style="font-size:28px;font-weight:700;color:var(--danger);">'+errors.length+'</div>' +
+            '<div style="font-size:12px;color:#b91c1c;font-weight:600;">Errors</div>' +
+          '</div>' : '') +
+        '</div>' +
+        (errors.length ? '<details style="text-align:left;max-width:500px;margin:0 auto 16px;"><summary style="cursor:pointer;font-size:12px;color:#b91c1c;">View errors</summary>' +
+          '<div style="font-size:11px;color:var(--text2);margin-top:6px;">'+errors.slice(0,20).join('<br>')+'</div></details>' : '') +
+        '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">' +
+          '<button class="btn btn-primary" onclick="navigateTo(\'all-students\')">👥 View Students</button>' +
+          '<button class="btn btn-outline" onclick="navigateTo(\'cashflow\')">💰 View Transactions</button>' +
+          '<button class="btn btn-outline" onclick="renderImportPage()">📥 Import Another File</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+    // Refresh dependent views
+    if (typeof renderDashboard === 'function') renderDashboard();
+    addNotification('Import complete: '+totalStudents+' students, '+totalTx+' transactions', 'success');
+  }, 600);
+}
+
+
+// ═══════════════════════════════════════════════════════════
+//  FORM 5 / FORM 14 — ADD / EDIT / DELETE
+// ═══════════════════════════════════════════════════════════
+
+let _editingFormId  = null;
+let _activeFormType = 'Form 5';
+
+function openAddFormModal(formType) {
+  _editingFormId  = null;
+  _activeFormType = formType || 'Form 5';
+  document.getElementById('form-modal-title').textContent = '+ Add ' + _activeFormType + ' Record';
+  _showFormFields(_activeFormType);
+  ['fm-serialNo','fm-candidateName','fm-phone','fm-address','fm-vehicleClass',
+   'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice',
+   'fm-guardianName','fm-dob','fm-enrollDate','fm-endDate14'].forEach(function(id){
+    var el = document.getElementById(id); if (el) el.value = '';
+  });
+  document.getElementById('fm-status').value = 'Pending';
+  openModal('modal-add-form');
+}
+
+function editFormRecord(id) {
+  var f = (data.forms||[]).find(function(x){ return (x.firebaseId||x.id)===id; });
+  if (!f) { showToast('Record not found'); return; }
+  _editingFormId  = id;
+  _activeFormType = f.formType || 'Form 5';
+  document.getElementById('form-modal-title').textContent = '✏️ Edit ' + _activeFormType + ' Record';
+  _showFormFields(_activeFormType);
+  function set(eid, val){ var el=document.getElementById(eid); if(el) el.value=val||''; }
+  set('fm-serialNo',      f.serialNo);
+  set('fm-candidateName', f.candidateName);
+  set('fm-phone',         f.phone);
+  set('fm-address',       f.address);
+  set('fm-vehicleClass',  f.vehicleClass);
+  set('fm-status',        f.status||'Pending');
+  if (_activeFormType === 'Form 5') {
+    set('fm-vehicleNumber', f.vehicleNumber);
+    set('fm-startDate',     f.startDate);
+    set('fm-endDate',       f.endDate);
+    set('fm-rtoOffice',     f.rtoOffice);
+  } else {
+    set('fm-guardianName',  f.guardianName);
+    set('fm-dob',           f.dob);
+    set('fm-enrollDate',    f.enrollDate);
+    set('fm-endDate14',     f.endDate);
+  }
+  openModal('modal-add-form');
+}
+
+async function deleteFormRecord(id) {
+  if (!confirm('Delete this form record? This cannot be undone.')) return;
+  try {
+    if (currentSchoolId) { await db.collection('forms').doc(id).delete(); }
+    data.forms = (data.forms||[]).filter(function(f){ return (f.firebaseId||f.id)!==id; });
+    renderFormsRegistry(_activeFormType);
+    addNotification('Form record deleted', 'info');
+  } catch(err) {
+    console.error('Delete form error:', err);
+    alert('Error deleting record. Please try again.');
+  }
+}
+
+async function saveFormRecord() {
+  var get = function(id){ var el=document.getElementById(id); return el?el.value.trim():''; };
+  var candidateName = get('fm-candidateName');
+  if (!candidateName) { alert('Candidate Name is required.'); return; }
+  var record = {
+    formType:      _activeFormType,
+    schoolId:      currentSchoolId || '',
+    serialNo:      get('fm-serialNo'),
+    candidateName: candidateName,
+    phone:         get('fm-phone'),
+    address:       get('fm-address'),
+    vehicleClass:  get('fm-vehicleClass'),
+    status:        get('fm-status') || 'Pending',
+    updatedAt:     new Date().toISOString()
+  };
+  if (_activeFormType === 'Form 5') {
+    record.vehicleNumber = get('fm-vehicleNumber');
+    record.startDate     = get('fm-startDate');
+    record.endDate       = get('fm-endDate');
+    record.rtoOffice     = get('fm-rtoOffice');
+  } else {
+    record.guardianName  = get('fm-guardianName');
+    record.dob           = get('fm-dob');
+    record.enrollDate    = get('fm-enrollDate');
+    record.endDate       = get('fm-endDate14');
+  }
+  try {
+    if (_editingFormId) {
+      if (currentSchoolId) { await db.collection('forms').doc(_editingFormId).update(record); }
+      var idx = (data.forms||[]).findIndex(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
+      if (idx !== -1) data.forms[idx] = Object.assign({}, data.forms[idx], record);
+      addNotification(_activeFormType + ' record updated', 'success');
+    } else {
+      record.createdAt = new Date().toISOString();
+      var newId = 'frm_' + Date.now();
+      if (currentSchoolId) {
+        var docRef = await db.collection('forms').add(record);
+        newId = docRef.id;
+      }
+      record.firebaseId = newId;
+      record.id = newId;
+      if (!data.forms) data.forms = [];
+      data.forms.push(record);
+      addNotification(_activeFormType + ' record added', 'success');
+    }
+    closeModal('modal-add-form');
+    renderFormsRegistry(_activeFormType);
+  } catch(err) {
+    console.error('Save form error:', err);
+    alert('Error saving record. Please try again.');
+  }
+}
+
+function _showFormFields(formType) {
+  var f5  = document.getElementById('form5-fields');
+  var f14 = document.getElementById('form14-fields');
+  if (f5)  f5.style.display  = formType === 'Form 5'  ? '' : 'none';
+  if (f14) f14.style.display = formType === 'Form 14' ? '' : 'none';
+}
+
 </script>
+
+<!-- ADD / EDIT FORM 5 & FORM 14 MODAL -->
+<div class="modal-overlay" id="modal-add-form">
+  <div class="modal" style="width:640px;max-width:96vw;">
+    <div class="modal-header">
+      <h3 id="form-modal-title">+ Add Form Record</h3>
+      <button class="modal-close" onclick="closeModal('modal-add-form')">✕</button>
+    </div>
+
+    <!-- Common fields -->
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Serial No.</label>
+        <input type="text" id="fm-serialNo" placeholder="e.g. 001">
+      </div>
+      <div class="form-group">
+        <label>Candidate Name *</label>
+        <input type="text" id="fm-candidateName" placeholder="Full name">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="fm-phone" placeholder="Mobile number">
+      </div>
+      <div class="form-group">
+        <label>Vehicle Class</label>
+        <select id="fm-vehicleClass">
+          <option value="">-- Select --</option>
+          <option value="LMV">LMV (4-Wheeler)</option>
+          <option value="MCWG">MCWG (2-Wheeler)</option>
+          <option value="MCWOG">MCWOG (Gearless)</option>
+          <option value="HMV">HMV (Heavy Vehicle)</option>
+          <option value="LMV + MCWG">LMV + MCWG</option>
+        </select>
+      </div>
+      <div class="form-group full">
+        <label>Address</label>
+        <textarea id="fm-address" rows="2" placeholder="Candidate address"></textarea>
+      </div>
+    </div>
+
+    <!-- Form 5 specific fields -->
+    <div id="form5-fields">
+      <div style="font-size:12px;font-weight:600;color:#15803d;margin:14px 0 10px;">📄 Form 5 Details</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Vehicle Number</label>
+          <input type="text" id="fm-vehicleNumber" placeholder="e.g. KA01AB1234">
+        </div>
+        <div class="form-group">
+          <label>RTO Office</label>
+          <input type="text" id="fm-rtoOffice" placeholder="e.g. RTO Bengaluru">
+        </div>
+        <div class="form-group">
+          <label>Training Start Date</label>
+          <input type="date" id="fm-startDate">
+        </div>
+        <div class="form-group">
+          <label>Training End Date</label>
+          <input type="date" id="fm-endDate">
+        </div>
+      </div>
+    </div>
+
+    <!-- Form 14 specific fields -->
+    <div id="form14-fields" style="display:none;">
+      <div style="font-size:12px;font-weight:600;color:#7c3aed;margin:14px 0 10px;">📝 Form 14 Details</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Son / Wife / Daughter of</label>
+          <input type="text" id="fm-guardianName" placeholder="Guardian / parent name">
+        </div>
+        <div class="form-group">
+          <label>Date of Birth</label>
+          <input type="date" id="fm-dob">
+        </div>
+        <div class="form-group">
+          <label>Enrollment Date</label>
+          <input type="date" id="fm-enrollDate">
+        </div>
+        <div class="form-group">
+          <label>Completion Date</label>
+          <input type="date" id="fm-endDate14">
+        </div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="form-grid" style="margin-top:14px;">
+      <div class="form-group">
+        <label>Status</label>
+        <select id="fm-status">
+          <option value="Pending">Pending</option>
+          <option value="Submitted">Submitted</option>
+          <option value="Approved">Approved</option>
+          <option value="Rejected">Rejected</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top:22px;display:flex;gap:10px;">
+      <button class="btn btn-accent" onclick="saveFormRecord()" style="flex:1;">✓ Save Record</button>
+      <button class="btn btn-outline" onclick="closeModal('modal-add-form')">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <!-- ADD VEHICLE MODAL -->
 <div class="modal-overlay" id="modal-add-vehicle">
