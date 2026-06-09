@@ -11335,7 +11335,15 @@ function generateStudentInvoice(id) {
 function printInvoice() {
   const content = document.getElementById('invoice-content');
   if (!content) return;
-  const win = window.open('','_blank','width=800,height=900');
+  const win = window.open('about:blank','_blank','width=900,height=900');
+  if (!win) {
+    if (typeof showToast === 'function') {
+      showToast('Please allow pop-ups to print the invoice.');
+    } else {
+      alert('Please allow pop-ups to print the invoice.');
+    }
+    return;
+  }
   const html = '<html><head><title>Invoice</title><style>' +
     'body{font-family:\'Inter\',sans-serif;color:#0f172a;background:#f8fafc;margin:0;padding:24px;}' +
     '#invoice-content{max-width:900px;margin:0 auto;}' +
@@ -11347,10 +11355,12 @@ function printInvoice() {
     '@page{margin:18mm;}' +
     '@media print{button{display:none!important;}body{padding:0;margin:0;background:#ffffff;}}' +
     '</style></head><body>' + content.innerHTML +
-    '<script>window.onload=function(){window.print();window.close();}' + '<\/script>' +
+    '<script>window.onload=function(){window.print();window.close();}<' + '/script>' +
     '</body></html>';
+  win.document.open();
   win.document.write(html);
   win.document.close();
+  win.focus();
 }
 
 // Add invoice button to viewStudent modal
