@@ -4044,6 +4044,25 @@ const FirebaseService = {
       const snapshot = await collection.orderBy(orderBy, orderDirection).get();
       return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } catch (error) {
+      // If missing composite index, fall back to unordered fetch + client-side sort
+      if (error && error.code === 'failed-precondition' && error.message && error.message.includes('index')) {
+        try {
+          const snapshot = await collection.get();
+          const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          docs.sort((a, b) => {
+            const av = a[orderBy], bv = b[orderBy];
+            if (!av && !bv) return 0;
+            if (!av) return 1;
+            if (!bv) return -1;
+            const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+            return orderDirection === 'desc' ? -cmp : cmp;
+          });
+          return docs;
+        } catch (fallbackError) {
+          console.error('Error getting documents (fallback):', fallbackError);
+          throw fallbackError;
+        }
+      }
       console.error('Error getting documents:', error);
       throw error;
     }
