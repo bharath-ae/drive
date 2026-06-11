@@ -426,12 +426,6 @@
       </div>
     </div>
     <div class="splash-content">
-      <div class="splash-logo">
-        <div class="li">🚗</div>
-        <h1>DriveSchool Pro</h1>
-        <p>Multi-Tenant Driving School Management</p>
-      </div>
-      
       <!-- School Selection/Creation (hidden until login) -->
       <div id="school-section" style="display: none;">
         <div class="login-field">
@@ -511,6 +505,26 @@
             📍 Get Current Location
           </button>
           <div id="location-status" style="margin-top: 8px; font-size: 12px; color: var(--text2);"></div>
+        </div>
+        <div class="form-group full" style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:500;color:var(--text);">Invoice Settings</label>
+          <div style="display: grid; gap: 10px; margin-bottom: 10px;">
+            <div>
+              <label style="font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px;">Invoice Prefix</label>
+              <input type="text" id="new-invoice-prefix" placeholder="INV-" class="form-control" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:6px;font-size:14px; box-sizing: border-box;">
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <div>
+                <label style="font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px;">Invoice Starting Number</label>
+                <input type="number" id="new-invoice-start" placeholder="1000" class="form-control" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:6px;font-size:14px; box-sizing: border-box;">
+              </div>
+              <div>
+                <label style="font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px;">Current Invoice Counter</label>
+                <input type="number" id="new-invoice-counter" placeholder="1000" class="form-control" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:6px;font-size:14px; box-sizing: border-box;">
+              </div>
+            </div>
+          </div>
+          <div style="font-size: 11px; color: var(--text2);">Use these values to control invoice serials for this school.</div>
         </div>
       </div>
       
@@ -1434,7 +1448,10 @@
 
       <!-- Success Toast -->
       <div id="toast" style="display:none;position:fixed;bottom:28px;right:28px;background:var(--success);color:white;padding:14px 22px;border-radius:12px;font-size:14px;font-weight:500;box-shadow:var(--shadow-lg);z-index:9999;animation:slideUp 0.3s ease;">
-        <span id="toast-msg">Done!</span>
+        <div style="display:flex;align-items:center;gap:10px;justify-content:space-between;">
+          <span id="toast-msg">Done!</span>
+          <span id="toast-time" style="font-size:11px;opacity:0.8;white-space:nowrap;"></span>
+        </div>
       </div>
 
       
@@ -2729,15 +2746,47 @@
               const ref = db.collection('schools').doc(currentSchoolId).collection('studentAttendance').doc(docId);
               batch.set(ref, rec);
             });
-            // Update class counts + auto-complete status
+            
+            // Update class counts for ALL students in records, not just those in data.students
+            const studentsToUpdate = new Map();
+            
+            // First, collect all students from data.students array
             data.students.forEach(s => {
-              if ((s.classes || 0) > 0 && records.some(r => r.studentId === (s.firebaseId || s.id) && (r.status === 'present' || r.status === 'late'))) {
-                const ref = db.collection('schools').doc(currentSchoolId).collection('students').doc(String(s.firebaseId || s.id));
-                const updateData = { classes: s.classes };
-                if (s.status === 'Completed') updateData.status = 'Completed';
-                batch.update(ref, updateData);
+              if (records.some(r => r.studentId === (s.firebaseId || s.id) && (r.status === 'present' || r.status === 'late'))) {
+                studentsToUpdate.set(String(s.firebaseId || s.id), {
+                  classes: s.classes,
+                  status: s.status
+                });
               }
             });
+            
+            // Then process records to update Firestore for each student with a class
+            const uniqueStudents = new Set();
+            records.forEach(rec => {
+              if ((rec.status === 'present' || rec.status === 'late') && rec.studentId) {
+                const studentId = String(rec.studentId);
+                if (!uniqueStudents.has(studentId)) {
+                  uniqueStudents.add(studentId);
+                  const student = studentsToUpdate.get(studentId);
+                  const ref = db.collection('schools').doc(currentSchoolId).collection('students').doc(studentId);
+                  
+                  if (student) {
+                    // Student exists in data.students, update with exact count
+                    batch.update(ref, {
+                      classes: (student.classes || 0),
+                      status: student.status
+                    });
+                  } else {
+                    // Student NOT in data.students - use atomic increment
+                    // This handles students from other contexts safely
+                    batch.update(ref, {
+                      classes: firebase.firestore.FieldValue.increment(1)
+                    });
+                  }
+                }
+              }
+            });
+            
             await batch.commit();
             firebaseSuccess = true;
           } catch(e) {
@@ -2749,13 +2798,28 @@
                 firebaseSuccess = true;
               } catch(e2) { console.error('Individual save failed:', rec.studentName, e2.message); }
             }
-            for (const s of data.students) {
-              if (records.some(r => r.studentId === (s.firebaseId || s.id) && (r.status === 'present' || r.status === 'late'))) {
-                try {
-                  const updateData = { classes: s.classes };
-                  if (s.status === 'Completed') updateData.status = 'Completed';
-                  await db.collection('schools').doc(currentSchoolId).collection('students').doc(String(s.firebaseId || s.id)).update(updateData);
-                } catch(e2) { console.error('Class update failed:', s.name, e2.message); }
+            // Update class counts for all students from records (fallback path)
+            const processedStudents = new Set();
+            for (const rec of records) {
+              if ((rec.status === 'present' || rec.status === 'late') && rec.studentId) {
+                const studentId = String(rec.studentId);
+                if (!processedStudents.has(studentId)) {
+                  processedStudents.add(studentId);
+                  try {
+                    const student = data.students.find(s => String(s.firebaseId || s.id) === studentId);
+                    if (student) {
+                      // Student in data.students, update with exact count
+                      const updateData = { classes: (student.classes || 0) };
+                      if (student.status === 'Completed') updateData.status = 'Completed';
+                      await db.collection('schools').doc(currentSchoolId).collection('students').doc(studentId).update(updateData);
+                    } else {
+                      // Student NOT in data.students - use atomic increment
+                      await db.collection('schools').doc(currentSchoolId).collection('students').doc(studentId).update({
+                        classes: firebase.firestore.FieldValue.increment(1)
+                      });
+                    }
+                  } catch(e2) { console.error('Class update failed for student:', studentId, e2.message); }
+                }
               }
             }
           }
@@ -3007,6 +3071,9 @@
       function showToast(msg) {
         const t = document.getElementById('toast');
         document.getElementById('toast-msg').textContent = msg;
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        document.getElementById('toast-time').textContent = timeStr;
         t.style.display = 'block';
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
@@ -3243,6 +3310,7 @@ function renderInstructorStudents() {
   }
 
   const myStudents = allStudents.filter(isMyStudent);
+  const activeSession = loadActiveOtherClassSession();
 
   if (myStudents.length === 0) {
     list.innerHTML =
@@ -3266,6 +3334,11 @@ function renderInstructorStudents() {
     const feeLeft = (s.totalFee || 0) - (s.paid || 0);
     const displayId = s.studentId || (sid ? 'FG-' + String(sid).slice(-6).toUpperCase() : '—');
 
+    const actionButtons = (activeSession && String(activeSession.studentId) === String(sid))
+      ? ('<button class="btn btn-accent btn-sm" style="flex:1;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">Open Active Class</button>' +
+         '<button class="btn btn-danger btn-sm" onclick="endClassTimer(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">End Class</button>')
+      : ('<button class="btn btn-outline btn-sm" style="flex:1;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">Start Class</button>');
+
     return '<div class="card" style="margin:0;">' +
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">' +
         '<div class="avatar" style="width:46px;height:46px;font-size:16px;background:' + COLORS[colorIdx] + '22;color:' + COLORS[colorIdx] + ';">' + initials + '</div>' +
@@ -3287,7 +3360,7 @@ function renderInstructorStudents() {
       (dlEligible ? '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;font-size:12px;color:var(--primary);margin-bottom:8px;">&#x1F4CB; DL Test eligible — ' + (total - classes) + ' class' + (total-classes===1?'':'es') + ' remaining</div>' : '') +
       (feeLeft > 0 ? '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 10px;font-size:12px;color:var(--danger);margin-bottom:8px;">&#x26A0;&#xFE0F; Fee pending: &#x20B9;' + feeLeft.toLocaleString() + '</div>' : '') +
       '<div style="display:flex;gap:8px;margin-top:8px;">' +
-        '<button class="btn btn-outline btn-sm" style="flex:1;" onclick="updateClasses(\'' + sid + '\')">+ Mark Class</button>' +
+        actionButtons +
         '<button class="btn btn-primary btn-sm" onclick="viewStudent(\'' + sid + '\')">View</button>' +
       '</div>' +
     '</div>';
@@ -3298,14 +3371,32 @@ function renderInstructorStudents() {
 
   // Also include students scheduled for this instructor today (even if record not assigned)
 
-async function updateClasses(firebaseId) {
-  if (!firebaseId || !currentSchoolId) {
+async function updateClasses(studentKey) {
+  if (!studentKey || !currentSchoolId) {
     showToast('⚠ Cannot update — student ID missing'); return;
   }
   try {
-    const ref = db.collection('schools').doc(currentSchoolId).collection('students').doc(String(firebaseId));
-    const doc = await ref.get();
-    if (!doc.exists) { showToast('⚠ Student not found in database'); return; }
+    const studentsCollection = db.collection('schools').doc(currentSchoolId).collection('students');
+    let docRef = studentsCollection.doc(String(studentKey));
+    let doc = await docRef.get();
+
+    if (!doc.exists) {
+      const queryByStudentId = await studentsCollection.where('studentId', '==', String(studentKey)).limit(1).get();
+      if (!queryByStudentId.empty) {
+        doc = queryByStudentId.docs[0];
+      }
+    }
+    if (!doc.exists) {
+      const queryByFirebaseId = await studentsCollection.where('firebaseId', '==', String(studentKey)).limit(1).get();
+      if (!queryByFirebaseId.empty) {
+        doc = queryByFirebaseId.docs[0];
+      }
+    }
+    if (!doc.exists) {
+      showToast('⚠ Student not found in database');
+      return;
+    }
+
     const student = { ...doc.data(), firebaseId: doc.id };
     const maxClasses = student.totalClasses || 27;
     if ((student.classes || 0) >= maxClasses) {
@@ -3317,10 +3408,10 @@ async function updateClasses(firebaseId) {
     const nowComplete = newClasses >= maxClasses;
     if (nowComplete) updateData.status = 'Completed';
 
-    await ref.update(updateData);
+    await studentsCollection.doc(doc.id).update(updateData);
 
     // Update local data
-    const local = data.students.find(s => (s.firebaseId || s.id) === String(firebaseId));
+    const local = data.students.find(s => (s.firebaseId || s.id) === doc.id || String(s.studentId) === String(studentKey));
     if (local) {
       local.classes = newClasses;
       if (nowComplete) local.status = 'Completed';
@@ -3345,6 +3436,7 @@ async function updateClasses(firebaseId) {
     }
 
     // Refresh all panels
+    if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
     renderInstructorStudents();
     initStudentAttendancePage();
     if (typeof renderStudentsTable === 'function') renderStudentsTable();
@@ -3450,6 +3542,26 @@ async function getSchoolLocation() {
   const statusDiv = document.getElementById('location-status');
   const latInput = document.getElementById('school-latitude');
   const lonInput = document.getElementById('school-longitude');
+  
+  statusDiv.textContent = 'Getting location...';
+  statusDiv.style.color = 'var(--text2)';
+  
+  try {
+    const location = await LocationService.getCurrentLocation();
+    latInput.value = location.latitude.toFixed(6);
+    lonInput.value = location.longitude.toFixed(6);
+    statusDiv.textContent = `✓ Location captured (accuracy: ±${Math.round(location.accuracy)}m)`;
+    statusDiv.style.color = 'var(--success)';
+  } catch (error) {
+    statusDiv.textContent = '❌ ' + error.message;
+    statusDiv.style.color = 'var(--danger)';
+  }
+}
+
+async function getEditSchoolLocation() {
+  const statusDiv = document.getElementById('edit-location-status');
+  const latInput = document.getElementById('esc-latitude');
+  const lonInput = document.getElementById('esc-longitude');
   
   statusDiv.textContent = 'Getting location...';
   statusDiv.style.color = 'var(--text2)';
@@ -3910,6 +4022,62 @@ service cloud.firestore {
 }
 */
 
+
+// ============================================================
+// FG CACHE — localStorage-backed read cache to minimise
+//            Firestore reads.  TTL = 5 min for live data,
+//            24 h for stable collections (students, staff…).
+// ============================================================
+const FGCache = {
+  TTL_SHORT:  5   * 60 * 1000,   // 5 min  — transactions, fuel, notifications
+  TTL_MEDIUM: 30  * 60 * 1000,   // 30 min — dlTests, otherServices, forms, schedule
+  TTL_LONG:   24  * 60 * 60 * 1000, // 24 h — students, admins, staff
+
+  _key(schoolId, collection) {
+    return 'fgc:' + (schoolId || 'x') + ':' + collection;
+  },
+
+  get(schoolId, collection) {
+    try {
+      const raw = localStorage.getItem(this._key(schoolId, collection));
+      if (!raw) return null;
+      const { ts, data, ttl } = JSON.parse(raw);
+      if (Date.now() - ts > ttl) { this.del(schoolId, collection); return null; }
+      return data;
+    } catch(e) { return null; }
+  },
+
+  set(schoolId, collection, data, ttl) {
+    try {
+      localStorage.setItem(this._key(schoolId, collection),
+        JSON.stringify({ ts: Date.now(), data, ttl: ttl || this.TTL_MEDIUM }));
+    } catch(e) { /* storage full — ignore */ }
+  },
+
+  del(schoolId, collection) {
+    try { localStorage.removeItem(this._key(schoolId, collection)); } catch(e) {}
+  },
+
+  // Invalidate a collection for a school (call after any write to that collection)
+  invalidate(schoolId, collection) { this.del(schoolId, collection); },
+
+  // Wipe everything for a school (used on school-switch / logout)
+  clearSchool(schoolId) {
+    try {
+      const prefix = 'fgc:' + (schoolId || 'x') + ':';
+      Object.keys(localStorage).filter(k => k.startsWith(prefix))
+        .forEach(k => localStorage.removeItem(k));
+    } catch(e) {}
+  },
+
+  clearAll() {
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith('fgc:'))
+        .forEach(k => localStorage.removeItem(k));
+    } catch(e) {}
+  }
+};
+
 // ============================================================
 // SAAS MULTI-TENANT FIREBASE SERVICE MODULE
 // ============================================================
@@ -3955,13 +4123,14 @@ const FirebaseService = {
   },
 
   // Generic CRUD operations
-  async addDocument(collection, data) {
+  async addDocument(collection, data, cacheKey = null) {
     try {
       const docRef = await collection.add({
         ...data,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      if (cacheKey && currentSchoolId) FGCache.invalidate(currentSchoolId, cacheKey);
       return { id: docRef.id, ...data };
     } catch (error) {
       console.error('Error adding document:', error);
@@ -3969,12 +4138,13 @@ const FirebaseService = {
     }
   },
 
-  async updateDocument(collection, docId, data) {
+  async updateDocument(collection, docId, data, cacheKey = null) {
     try {
       await collection.doc(docId).update({
         ...data,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      if (cacheKey && currentSchoolId) FGCache.invalidate(currentSchoolId, cacheKey);
       return { id: docId, ...data };
     } catch (error) {
       console.error('Error updating document:', error);
@@ -3982,9 +4152,10 @@ const FirebaseService = {
     }
   },
 
-  async deleteDocument(collection, docId) {
+  async deleteDocument(collection, docId, cacheKey = null) {
     try {
       await collection.doc(docId).delete();
+      if (cacheKey && currentSchoolId) FGCache.invalidate(currentSchoolId, cacheKey);
       return docId;
     } catch (error) {
       console.error('Error deleting document:', error);
@@ -4039,33 +4210,36 @@ const FirebaseService = {
     return updated;
   },
 
-  async getDocuments(collection, orderBy = 'createdAt', orderDirection = 'desc') {
+  async getDocuments(collection, orderBy = 'createdAt', orderDirection = 'desc', cacheKey = null, cacheTTL = null) {
+    // --- Cache read ---
+    if (cacheKey && currentSchoolId) {
+      const cached = FGCache.get(currentSchoolId, cacheKey);
+      if (cached) { return cached; }
+    }
+    let docs;
     try {
       const snapshot = await collection.orderBy(orderBy, orderDirection).get();
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     } catch (error) {
-      // If missing composite index, fall back to unordered fetch + client-side sort
+      // Missing composite index: fall back to unordered fetch + client-side sort
       if (error && error.code === 'failed-precondition' && error.message && error.message.includes('index')) {
         try {
           const snapshot = await collection.get();
-          const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
           docs.sort((a, b) => {
             const av = a[orderBy], bv = b[orderBy];
-            if (!av && !bv) return 0;
-            if (!av) return 1;
-            if (!bv) return -1;
+            if (!av && !bv) return 0; if (!av) return 1; if (!bv) return -1;
             const cmp = av < bv ? -1 : av > bv ? 1 : 0;
             return orderDirection === 'desc' ? -cmp : cmp;
           });
-          return docs;
-        } catch (fallbackError) {
-          console.error('Error getting documents (fallback):', fallbackError);
-          throw fallbackError;
-        }
-      }
-      console.error('Error getting documents:', error);
-      throw error;
+        } catch (fbErr) { console.error('Error getting documents (fallback):', fbErr); throw fbErr; }
+      } else { console.error('Error getting documents:', error); throw error; }
     }
+    // --- Cache write ---
+    if (cacheKey && currentSchoolId && docs) {
+      FGCache.set(currentSchoolId, cacheKey, docs, cacheTTL);
+    }
+    return docs;
   },
 
   async getDocument(collection, docId) {
@@ -4102,7 +4276,7 @@ const FirebaseService = {
   },
 
   async getStudents() {
-    return this.getDocuments(this.studentsRef, 'enrolled', 'desc');
+    return this.getDocuments(this.studentsRef, 'enrolled', 'desc', 'students', FGCache.TTL_SHORT);
   },
 
   onStudentsChange(callback) {
@@ -4115,12 +4289,19 @@ const FirebaseService = {
   },
 
   async getTransactions(monthFilter = null) {
+    const cacheKey = monthFilter ? ('transactions:' + monthFilter) : 'transactions';
+    if (currentSchoolId) {
+      const cached = FGCache.get(currentSchoolId, cacheKey);
+      if (cached) return cached;
+    }
     let query = this.transactionsRef.orderBy('date', 'desc');
     if (monthFilter) {
       query = query.where('date', '>=', monthFilter + '-01').where('date', '<=', monthFilter + '-31');
     }
     const snapshot = await query.get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    if (currentSchoolId) FGCache.set(currentSchoolId, cacheKey, docs, FGCache.TTL_SHORT);
+    return docs;
   },
 
   onTransactionsChange(callback, monthFilter = null) {
@@ -4649,11 +4830,11 @@ async function loadInitialData() {
       const [students, transactions, dlTests, fuel, notifications, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getTransactions(),
-        FirebaseService.getDocuments(FirebaseService.dlTestsRef),
-        FirebaseService.getDocuments(FirebaseService.fuelRef),
-        FirebaseService.getDocuments(FirebaseService.notificationsRef),
-        FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid)),
-        FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid))
+        FirebaseService.getDocuments(FirebaseService.dlTestsRef,        'createdAt','desc','dlTests',       FGCache.TTL_MEDIUM),
+        FirebaseService.getDocuments(FirebaseService.fuelRef,            'createdAt','desc','fuel',          FGCache.TTL_SHORT),
+        FirebaseService.getDocuments(FirebaseService.notificationsRef,   'createdAt','desc','notifications', FGCache.TTL_SHORT),
+        FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid),'createdAt','desc','otherServices',FGCache.TTL_MEDIUM),
+        FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid),        'createdAt','desc','forms',       FGCache.TTL_MEDIUM)
       ]);
       if (students.status === 'fulfilled')      data.students      = mergeSchoolData(data.students,      students.value,      sid);
       if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
@@ -4666,10 +4847,10 @@ async function loadInitialData() {
       const [students, transactions, dlTests, notifications, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getTransactions(),
-        FirebaseService.getDocuments(FirebaseService.dlTestsRef),
-        FirebaseService.getDocuments(FirebaseService.notificationsRef),
-        FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid)),
-        FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid))
+        FirebaseService.getDocuments(FirebaseService.dlTestsRef,        'createdAt','desc','dlTests',       FGCache.TTL_MEDIUM),
+        FirebaseService.getDocuments(FirebaseService.notificationsRef,   'createdAt','desc','notifications', FGCache.TTL_SHORT),
+        FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid),'createdAt','desc','otherServices',FGCache.TTL_MEDIUM),
+        FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid),        'createdAt','desc','forms',       FGCache.TTL_MEDIUM)
       ]);
       if (students.status === 'fulfilled')      data.students      = mergeSchoolData(data.students,      students.value,      sid);
       if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
@@ -4848,46 +5029,11 @@ function setupRealtimeListeners() {
     console.warn('Could not setup self-attendance listeners:', e.message);
   }
   
-  // Notifications listener (owner only)
-  try {
-    const notificationsUnsubscribe = FirebaseService.onDocumentsChange(FirebaseService.notificationsRef, notifications => {
-      data.notifications = notifications;
-      if (currentPage === 'notifications') {
-        renderNotifications();
-      }
-    }, 'createdAt', 'desc');
-    listeners.push(notificationsUnsubscribe);
-  } catch (e) {
-    console.warn('Could not setup notifications listener:', e.message);
-  }
+  // Notifications: loaded once in loadInitialData (no live listener needed — saves reads)
   
-  // Admins listener (only if current school is selected)
-  if (currentSchoolId && currentRole === 'owner') {
-    const adminsUnsubscribe = FirebaseService.schoolsRef.doc(currentSchoolId).collection('users').onSnapshot(snapshot => {
-      const firebaseAdmins = snapshot.docs.map(doc => ({ id: doc.id, firebaseId: doc.id, ...doc.data() }));
-      // Ignore stale empty flush that fires when a previous listener is unsubscribed
-      if (firebaseAdmins.length === 0 && data.admins.length > 0) return;
-      data.admins = firebaseAdmins;
-      if (currentPage === 'admin-management') renderAdminsTable();
-    }, error => {
-      console.error('Error in admins listener:', error);
-    });
-    listeners.push(adminsUnsubscribe);
-  }
+  // Admins: loaded on-demand when admin-management page opens (no live listener — saves reads)
   
-  // Staff listener (only if current school is selected)
-  if (currentSchoolId && (currentRole === 'owner' || currentRole === 'office')) {
-    const staffUnsubscribe = FirebaseService.schoolsRef.doc(currentSchoolId).collection('staff').onSnapshot(snapshot => {
-      const firebaseStaff = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // Ignore stale empty flush that fires when a previous listener is unsubscribed
-      if (firebaseStaff.length === 0 && data.staff.length > 0) return;
-      data.staff = firebaseStaff;
-      if (currentPage === 'staff-management') renderStaffTable();
-    }, error => {
-      console.error('Error in staff listener:', error);
-    });
-    listeners.push(staffUnsubscribe);
-  }
+  // Staff: loaded on-demand when staff-management page opens (no live listener — saves reads)
 }
 
 // ============================================================
@@ -5704,9 +5850,10 @@ async function doLogout() {
     await FirebaseService.signOut();
   } catch(e) { console.warn('Sign-out error:', e.message); }
 
-  // Clear persisted session
+  // Clear persisted session + all cached Firestore data
   try { localStorage.removeItem('fg_role'); } catch(e){}
   try { localStorage.removeItem('fg_schoolId'); } catch(e){}
+  try { FGCache.clearAll(); } catch(e){}
 
   // Reset all state
   currentSchoolId = null;
@@ -5728,20 +5875,28 @@ async function doLogout() {
   const _sp = document.getElementById('school-phone'); if(_sp) _sp.value = '';
   const _ss = document.getElementById('school-section'); if(_ss) _ss.style.display = 'none';
   const _nsf = document.getElementById('new-school-form'); if(_nsf) _nsf.style.display = 'none';
-  const _lf = document.getElementById('login-form'); if(_lf) _lf.style.display = 'none';
+  const _lf = document.getElementById('login-form'); if(_lf) _lf.style.display = 'block';
 
   // Reset login button text
   const loginBtn = document.querySelector('.btn-login');
   if(loginBtn) { loginBtn.textContent = 'Sign In →'; loginBtn.onclick = doLogin; loginBtn.disabled = false; }
 
-  // Show login screen immediately
+  // Show login screen with clean interface
   const splash = document.getElementById('splash');
   if(splash) {
     splash.style.display = 'flex';
-    // Make sure login form is visible not a loading spinner
+    
+    // Show splash content (logo + login form)
+    const splashContent = splash.querySelector('.splash-content');
+    if(splashContent) splashContent.style.display = 'flex';
+    
+    // Make sure login card is visible
     const loginCard = splash.querySelector('.splash-card');
     if(loginCard) loginCard.style.opacity = '1';
   }
+  
+  // Scroll to top
+  window.scrollTo(0, 0);
 }
 
 // ============================================================
@@ -5961,8 +6116,44 @@ function refreshPage(id) {
   }
   else if(id==='my-students') renderInstructorStudents();
   else if(id==='other-students') renderOtherStudentsPage();
-  else if(id==='admin-management') renderAdminsTable();
-  else if(id==='staff-management') renderStaffTable();
+  else if(id==='admin-management') {
+    // Lazy-load admins from Firestore only if not already in memory
+    if (!data.admins || data.admins.length === 0) {
+      if (currentSchoolId && typeof db !== 'undefined') {
+        const cached = FGCache.get(currentSchoolId, 'admins');
+        if (cached) {
+          data.admins = cached;
+          renderAdminsTable();
+        } else {
+          db.collection('schools').doc(currentSchoolId).collection('users').get()
+            .then(snap => {
+              data.admins = snap.docs.map(d => ({ id: d.id, firebaseId: d.id, ...d.data() }));
+              FGCache.set(currentSchoolId, 'admins', data.admins, FGCache.TTL_LONG);
+              renderAdminsTable();
+            }).catch(e => { console.warn('Could not load admins:', e.message); renderAdminsTable(); });
+        }
+      } else { renderAdminsTable(); }
+    } else { renderAdminsTable(); }
+  }
+  else if(id==='staff-management') {
+    // Lazy-load staff from Firestore only if not already in memory
+    if (!data.staff || data.staff.length === 0) {
+      if (currentSchoolId && typeof db !== 'undefined') {
+        const cached = FGCache.get(currentSchoolId, 'staff');
+        if (cached) {
+          data.staff = cached;
+          renderStaffTable();
+        } else {
+          db.collection('schools').doc(currentSchoolId).collection('staff').get()
+            .then(snap => {
+              data.staff = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+              FGCache.set(currentSchoolId, 'staff', data.staff, FGCache.TTL_LONG);
+              renderStaffTable();
+            }).catch(e => { console.warn('Could not load staff:', e.message); renderStaffTable(); });
+        }
+      } else { renderStaffTable(); }
+    } else { renderStaffTable(); }
+  }
   else if(id==='other-services') renderOtherServices();
   else if(id==='forms-registry') renderFormsRegistry('Form 5');
   else if(id==='form14-registry') renderFormsRegistry('Form 14');
@@ -5981,17 +6172,22 @@ function refreshPage(id) {
 // ============================================================
 // ── helper: fetch one school's data from Firebase ──────────────────────────
 async function fetchSchoolSnapshot(schoolId) {
+  // Serve from cache when available (TTL_SHORT = 5 min) to avoid re-reading all schools on every overall-dashboard visit
+  const cached = FGCache.get(schoolId, 'snapshot');
+  if (cached) return cached;
   try {
     const [studentsSnap, txSnap, staffSnap] = await Promise.all([
       db.collection('schools').doc(schoolId).collection('students').get(),
       db.collection('schools').doc(schoolId).collection('transactions').get(),
       db.collection('schools').doc(schoolId).collection('staff').get()
     ]);
-    return {
+    const result = {
       students:     studentsSnap.docs.map(d => ({ id: d.id, ...d.data(), schoolId })),
       transactions: txSnap.docs.map(d => ({ id: d.id, ...d.data(), schoolId })),
       staff:        staffSnap.docs.map(d => ({ id: d.id, ...d.data(), schoolId }))
     };
+    FGCache.set(schoolId, 'snapshot', result, FGCache.TTL_SHORT);
+    return result;
   } catch (e) {
     console.warn('fetchSchoolSnapshot failed for', schoolId, e.message);
     return { students: [], transactions: [], staff: [] };
@@ -6386,6 +6582,9 @@ function openCreateSchoolWithManagerModal() {
   document.getElementById('new-school-name').value = '';
   document.getElementById('new-school-address').value = '';
   document.getElementById('new-school-phone').value = '';
+  document.getElementById('new-invoice-prefix').value = 'INV-';
+  document.getElementById('new-invoice-start').value = '1000';
+  document.getElementById('new-invoice-counter').value = '1000';
   document.getElementById('cs-admin-name').value = '';
   document.getElementById('cs-admin-email').value = '';
   document.getElementById('cs-admin-password').value = '';
@@ -6610,6 +6809,38 @@ function openEditSchoolModal(schoolId) {
       <div class="form-group"><label>Website</label>
         <input type="text" id="esc-website" value="${school.website||''}" placeholder="www.example.com">
       </div>
+      <div class="form-group full"><label>School Location</label>
+        <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+          <input type="number" id="esc-latitude" value="${school.latitude||''}" placeholder="Latitude" step="any" style="flex: 1; padding: 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px;">
+          <input type="number" id="esc-longitude" value="${school.longitude||''}" placeholder="Longitude" step="any" style="flex: 1; padding: 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px;">
+        </div>
+        <button type="button" onclick="getEditSchoolLocation()" class="btn btn-secondary" style="padding: 8px 16px; font-size: 13px; border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 6px; cursor: pointer;">
+          📍 Get Current Location
+        </button>
+        <div id="edit-location-status" style="margin-top: 8px; font-size: 12px; color: var(--text2);"></div>
+      </div>
+      <div class="form-group full">
+        <label>Invoice Settings</label>
+        <div style="background: var(--surface2); border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+          <div style="margin-bottom: 10px;">
+            <label style="font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px;">Invoice Prefix</label>
+            <input type="text" id="esc-invoice-prefix" value="${school.invoicePrefix||'INV-'}" placeholder="e.g., INV-" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; box-sizing: border-box;">
+            <div style="font-size: 11px; color: var(--text2); margin-top: 4px;">Prefix for invoices (e.g., ARMB, INV-)</div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+            <div>
+              <label style="font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px;">Invoice Starting Number</label>
+              <input type="number" id="esc-invoice-start" value="${school.invoiceStartingNumber||1000}" placeholder="e.g., 1000" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--text2); margin-top: 4px;">The first invoice will start from this number</div>
+            </div>
+            <div>
+              <label style="font-size: 12px; color: var(--text2); display: block; margin-bottom: 4px;">Current Invoice Counter</label>
+              <input type="number" id="esc-invoice-counter" value="${school.invoiceCounter||(school.invoiceStartingNumber||1000)}" placeholder="Current counter" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; box-sizing: border-box;">
+              <div style="font-size: 11px; color: var(--text2); margin-top: 4px;">Next invoice will use this number (auto-incremented after each invoice)</div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="form-group full">
         <label>Principal Signature / Stamp Image</label>
         <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">Upload a PNG/JPG of the signature or stamp — it will appear on printed Form 5, 14, and 15.</p>
@@ -6635,6 +6866,11 @@ async function saveSchoolDetails(schoolId) {
   const licenseNo = document.getElementById('esc-license')?.value.trim();
   const principal = document.getElementById('esc-principal')?.value.trim();
   const website   = document.getElementById('esc-website')?.value.trim();
+  const latitude  = document.getElementById('esc-latitude')?.value;
+  const longitude = document.getElementById('esc-longitude')?.value;
+  const invoicePrefix = document.getElementById('esc-invoice-prefix')?.value.trim();
+  const invoiceStart = document.getElementById('esc-invoice-start')?.value;
+  const invoiceCounter = document.getElementById('esc-invoice-counter')?.value;
   const clearSig  = document.getElementById('esc-sig-clear')?.value === '1';
   const fileInput = document.getElementById('esc-signature-file');
   const file      = fileInput?.files?.[0];
@@ -6646,6 +6882,15 @@ async function saveSchoolDetails(schoolId) {
 
   try {
     const updates = { name, address, phone, licenseNo, license: licenseNo, principal, website, updatedAt: new Date().toISOString() };
+    
+    // Add latitude and longitude if provided
+    if (latitude) updates.latitude = parseFloat(latitude);
+    if (longitude) updates.longitude = parseFloat(longitude);
+    
+    // Add invoice settings if provided
+    if (invoicePrefix) updates.invoicePrefix = invoicePrefix;
+    if (invoiceStart) updates.invoiceStartingNumber = parseInt(invoiceStart);
+    if (invoiceCounter) updates.invoiceCounter = parseInt(invoiceCounter);
 
     // Handle signature image
     if (clearSig) {
@@ -6747,6 +6992,9 @@ async function createSchoolWithAdmin() {
   const schoolPhone = document.getElementById('new-school-phone').value.trim();
   const schoolLatitude = document.getElementById('school-latitude').value.trim();
   const schoolLongitude = document.getElementById('school-longitude').value.trim();
+  const schoolInvoicePrefix = document.getElementById('new-invoice-prefix').value.trim();
+  const schoolInvoiceStart = document.getElementById('new-invoice-start').value.trim();
+  const schoolInvoiceCounter = document.getElementById('new-invoice-counter').value.trim();
   const adminName = document.getElementById('cs-admin-name').value.trim();
   const adminEmail = document.getElementById('cs-admin-email').value.trim();
   const adminPassword = document.getElementById('cs-admin-password').value;
@@ -6793,12 +7041,19 @@ async function createSchoolWithAdmin() {
     const originalOwnerUid = currentUser.uid;
     
     // Create school
+    const invoicePrefix = schoolInvoicePrefix || 'INV-';
+    const invoiceStartingNumber = parseInt(schoolInvoiceStart, 10) || 1000;
+    const invoiceCounter = parseInt(schoolInvoiceCounter, 10) || invoiceStartingNumber;
+
     const schoolData = {
       name: schoolName,
       address: schoolAddress,
       phone: schoolPhone,
       latitude: parseFloat(schoolLatitude),
       longitude: parseFloat(schoolLongitude),
+      invoicePrefix,
+      invoiceStartingNumber,
+      invoiceCounter,
       ownerId: originalOwnerUid,
       ownerEmail: currentUser.email,
       createdAt: new Date().toISOString(),
@@ -6976,10 +7231,9 @@ async function selectSchoolForView(schoolId, schoolName) {
   data.otherServices = [];
 
   // Initialize Firebase data for the selected school
+  // (backfillOwnerMapping is skipped here — it reads all students/staff docs
+  //  just to write ownerId; very expensive and only needed once after migration)
   try {
-    if (currentRole === 'owner') {
-      await FirebaseService.backfillOwnerMappingForSchool(schoolId);
-    }
     await loadInitialData();
     setupRealtimeListeners();
     renderAllData();
@@ -10602,29 +10856,37 @@ function renderNotifications() {
   const list = document.getElementById('notif-list');
   if(!list) return;
   
-  // Initialize notifications array if it doesn't exist
   if (!data.notifications || !Array.isArray(data.notifications)) {
     data.notifications = [];
   }
   
-  list.innerHTML = data.notifications.map(n => `
-    <div style="padding:16px 20px;background:${n.read?'var(--surface)':'#eff6ff'};border-radius:var(--radius);border:1px solid ${n.read?'var(--border)':'#bfdbfe'};margin-bottom:10px;display:flex;align-items:flex-start;gap:12px;">
-      <span style="font-size:20px;">${n.type==='success'?'✅':n.type==='warning'?'⚠️':n.type==='alert'?'🔔':'ℹ️'}</span>
-      <div style="flex:1;">
-        <div style="font-size:13.5px;font-weight:${n.read?400:500};color:var(--text);">${n.msg}</div>
-        <div style="font-size:11px;color:var(--text3);margin-top:4px;">${n.time}</div>
-      </div>
-      ${!n.read?`<span class="badge badge-blue" style="font-size:10px;">New</span>`:''}
-    </div>
-  `).join('');
+  list.innerHTML = data.notifications.map(function(n) {
+    let displayTime = n.time;
+    if (displayTime === 'Just now' && n.createdAt) {
+      const date = typeof n.createdAt === 'string' ? new Date(n.createdAt) : n.createdAt.toDate();
+      const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const dateStr = date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
+      displayTime = timeStr + ' • ' + dateStr;
+    }
+    const badge = !n.read ? '<span class="badge badge-blue" style="font-size:10px;">New</span>' : '';
+    const icon = n.type==='success'?'✅':n.type==='warning'?'⚠️':n.type==='alert'?'🔔':'ℹ️';
+    const bgColor = n.read?'var(--surface)':'#eff6ff';
+    const borderColor = n.read?'var(--border)':'#bfdbfe';
+    const fontWeight = n.read?400:500;
+    return '<div style="padding:16px 20px;background:' + bgColor + ';border-radius:var(--radius);border:1px solid ' + borderColor + ';margin-bottom:10px;display:flex;align-items:flex-start;gap:12px;"><span style="font-size:20px;">' + icon + '</span><div style="flex:1;"><div style="font-size:13.5px;font-weight:' + fontWeight + ';color:var(--text);">' + n.msg + '</div><div style="font-size:11px;color:var(--text3);margin-top:4px;">' + displayTime + '</div></div>' + badge + '</div>';
+  }).join('');
 }
 
 async function addNotification(msg, type='info') {
   try {
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const dateStr = now.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
     const notificationData = {
       type,
       msg,
-      time: 'Just now',
+      time: timeStr + ' • ' + dateStr,
+      createdAt: now,
       read: false,
       id: Date.now().toString()
     };
@@ -10645,10 +10907,14 @@ async function addNotification(msg, type='info') {
   } catch (error) {
     console.error('Error adding notification:', error);
     // Fallback: add to local data even if Firebase fails
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const dateStr = now.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
     const notificationData = {
       type,
       msg,
-      time: 'Just now',
+      time: timeStr + ' • ' + dateStr,
+      createdAt: now,
       read: false,
       id: Date.now().toString()
     };
@@ -10889,6 +11155,11 @@ function renderOtherStudentsPage() {
   // All active non-completed students in the school NOT assigned to this instructor
   const myEmail = (typeof currentUser !== 'undefined' && currentUser ? currentUser.email : '').toLowerCase();
   const myName  = (typeof getCurrentInstructorName === 'function' ? getCurrentInstructorName() : '').toLowerCase();
+  const activeSession = loadActiveOtherClassSession();
+  if (activeSession) {
+    ensureActiveClassTimer();
+  }
+
   const allSchoolStudents = (data.students||[]).filter(function(s) {
     if (currentSchoolId && s.schoolId !== currentSchoolId) return false;
     if (s.status === 'Completed') return false;
@@ -10901,6 +11172,20 @@ function renderOtherStudentsPage() {
       '<div style="text-align:center;padding:60px;color:var(--text2);"><div style="font-size:48px;margin-bottom:16px;">&#x1F393;</div><div>No other active students in this school.</div></div>';
     return;
   }
+
+  const activeSessionBanner = activeSession ?
+    '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:16px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+        '<div style="min-width:0;">' +
+          '<div style="font-size:13px;font-weight:600;color:#1d4ed8;">&#x23F1; Active class in progress</div>' +
+          '<div style="font-size:13px;color:var(--text2);margin-top:4px;">Student: <strong>' + (activeSession.studentName||'Unknown') + '</strong> &nbsp;|&nbsp; Instructor: <strong>' + (activeSession.instructorName||'Unknown') + '</strong> &nbsp;|&nbsp; Started at: <strong>' + new Date(activeSession.startTime).toLocaleTimeString('en-IN') + '</strong></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+          '<button class="btn btn-accent btn-sm" onclick="openOtherStudentClassModal(\'' + String(activeSession.studentId).replace(/'/g,"\\'") + '\',\'' + (activeSession.studentName||'').replace(/'/g,"\\'") + '\')">Open Active Class</button>' +
+          '<button class="btn btn-danger btn-sm" onclick="endClassTimer(\'' + String(activeSession.studentId).replace(/'/g,"\\'") + '\',\'' + (activeSession.studentName||'').replace(/'/g,"\\'") + '\')">End Active Class</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' : '';
 
   const cards = allSchoolStudents.map(function(s) {
     const classes = s.classes || 0;
@@ -10936,6 +11221,7 @@ function renderOtherStudentsPage() {
       '<div><h2>&#x1F465; Other Students</h2><p>Give training to any student in this school</p></div>' +
       '<div style="font-size:13px;color:var(--text2);align-self:center;">' + allSchoolStudents.length + ' active students</div>' +
     '</div>' +
+    activeSessionBanner +
     '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#92400e;">&#x1F4A1; Click <strong>Give Training</strong> on any student to start a timed class session. You\'ll be asked to enter your instructor name. Class duration is auto-calculated.</div>' +
     '<div class="two-col">' + cards + '</div>';
 }
@@ -10945,11 +11231,101 @@ function renderOtherStudentsPage() {
 // ============================================================
 let _classTimerInterval = null;
 let _classStartTime = null;
+const ACTIVE_OTHER_CLASS_KEY = 'fg_activeOtherStudentClass';
+let _activeOtherClassSession = null;
+
+function loadActiveOtherClassSession() {
+  if (_activeOtherClassSession) return _activeOtherClassSession;
+  try {
+    const raw = localStorage.getItem(ACTIVE_OTHER_CLASS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.studentId && parsed.startTime) {
+      _activeOtherClassSession = parsed;
+      return _activeOtherClassSession;
+    }
+  } catch (e) {
+    console.warn('Could not load active class session:', e.message);
+  }
+  return null;
+}
+
+function saveActiveOtherClassSession(session) {
+  _activeOtherClassSession = session;
+  try {
+    localStorage.setItem(ACTIVE_OTHER_CLASS_KEY, JSON.stringify(session));
+  } catch (e) {
+    console.warn('Could not save active class session:', e.message);
+  }
+}
+
+function clearActiveOtherClassSession() {
+  _activeOtherClassSession = null;
+  try {
+    localStorage.removeItem(ACTIVE_OTHER_CLASS_KEY);
+  } catch (e) {
+    console.warn('Could not clear active class session:', e.message);
+  }
+}
+
+function ensureActiveClassTimer() {
+  const active = loadActiveOtherClassSession();
+  if (!active) return false;
+  if (!_classStartTime) _classStartTime = new Date(active.startTime);
+  if (!_classTimerInterval) startClassTimerInterval();
+  return true;
+}
+
+function startClassTimerInterval() {
+  if (!_classStartTime || _classTimerInterval) return;
+  updateClassTimerDisplay();
+  _classTimerInterval = setInterval(updateClassTimerDisplay, 1000);
+}
+
+function updateClassTimerDisplay() {
+  if (!_classStartTime) return;
+  const elapsed = Math.floor((Date.now() - _classStartTime.getTime()) / 1000);
+  const h = Math.floor(elapsed / 3600);
+  const m = Math.floor((elapsed % 3600) / 60);
+  const s = elapsed % 60;
+  const display = document.getElementById('class-timer-display');
+  const status = document.getElementById('class-timer-status');
+  if (display) display.textContent = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  if (status && loadActiveOtherClassSession()) {
+    status.textContent = 'Class in progress… started at ' + _classStartTime.toLocaleTimeString('en-IN');
+  }
+}
 
 function openOtherStudentClassModal(studentId, studentName) {
+  const activeSession = loadActiveOtherClassSession();
+  const isActiveSession = activeSession && String(activeSession.studentId) === String(studentId);
+  if (activeSession && !isActiveSession) {
+    studentId = activeSession.studentId;
+    studentName = activeSession.studentName;
+  }
+  const s = (data.students||[]).find(function(x){ return String(x.firebaseId||x.id)===String(studentId); });
+  const instructorValue = isActiveSession ? activeSession.instructorName : ((typeof getCurrentInstructorName==='function'?getCurrentInstructorName():'')||'');
+  if (isActiveSession && !_classStartTime) {
+    _classStartTime = new Date(activeSession.startTime);
+  }
+  ensureActiveClassTimer();
+
+  const timerDisplay = isActiveSession && _classStartTime ? (function(){
+    const elapsed = Math.floor((Date.now() - _classStartTime.getTime()) / 1000);
+    const h = Math.floor(elapsed / 3600);
+    const m = Math.floor((elapsed % 3600) / 60);
+    const s = elapsed % 60;
+    return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  })() : '00:00:00';
+  const timerStatus = isActiveSession && _classStartTime
+    ? 'Class in progress… started at ' + _classStartTime.toLocaleTimeString('en-IN')
+    : 'Press Start to begin the class session';
+  const startBtnStyle = isActiveSession ? 'display:none;' : '';
+  const endBtnStyle = isActiveSession ? '' : 'display:none;';
+  const instructorDisabled = isActiveSession ? 'disabled' : '';
+
   const old = document.getElementById('modal-other-class');
   if (old) old.remove();
-  const s = (data.students||[]).find(function(x){ return String(x.firebaseId||x.id)===String(studentId); });
 
   const modal = document.createElement('div');
   modal.id = 'modal-other-class';
@@ -10965,15 +11341,15 @@ function openOtherStudentClassModal(studentId, studentName) {
       '</div>' : '') +
       '<div class="form-group" style="margin-bottom:14px;">' +
         '<label style="font-weight:600;">Your Name (Instructor) *</label>' +
-        '<input type="text" id="other-class-instructor" placeholder="Enter your name" value="' + ((typeof getCurrentInstructorName==='function'?getCurrentInstructorName():'')||'') + '" style="margin-top:6px;">' +
+        '<input type="text" id="other-class-instructor" placeholder="Enter your name" value="' + instructorValue + '" style="margin-top:6px;" ' + instructorDisabled + '>' +
       '</div>' +
       '<div id="class-timer-panel" style="text-align:center;padding:20px;background:var(--surface2);border-radius:12px;margin-bottom:16px;">' +
-        '<div id="class-timer-display" style="font-size:42px;font-weight:700;font-family:\'Syne\';letter-spacing:2px;color:var(--primary);">00:00:00</div>' +
-        '<div id="class-timer-status" style="font-size:13px;color:var(--text2);margin-top:6px;">Press Start to begin the class session</div>' +
+        '<div id="class-timer-display" style="font-size:42px;font-weight:700;font-family:\'Syne\';letter-spacing:2px;color:var(--primary);">' + timerDisplay + '</div>' +
+        '<div id="class-timer-status" style="font-size:13px;color:var(--text2);margin-top:6px;">' + timerStatus + '</div>' +
       '</div>' +
       '<div id="class-timer-buttons" style="display:flex;gap:10px;margin-bottom:14px;">' +
-        '<button id="btn-start-class" class="btn btn-success" style="flex:1;font-size:15px;" onclick="startClassTimer(\'' + studentId + '\',\'' + studentName.replace(/'/g,"\\'") + '\')">&#x25B6; Start Class</button>' +
-        '<button id="btn-end-class" class="btn btn-danger" style="flex:1;font-size:15px;display:none;" onclick="endClassTimer(\'' + studentId + '\',\'' + studentName.replace(/'/g,"\\'") + '\')">&#x23F9; End Class</button>' +
+        '<button id="btn-start-class" class="btn btn-success" style="flex:1;font-size:15px;' + startBtnStyle + '" onclick="startClassTimer(\'' + studentId + '\',\'' + studentName.replace(/'/g,"\\'") + '\')">&#x25B6; Start Class</button>' +
+        '<button id="btn-end-class" class="btn btn-danger" style="flex:1;font-size:15px;' + endBtnStyle + '" onclick="endClassTimer(\'' + studentId + '\',\'' + studentName.replace(/'/g,"\\'") + '\')">&#x23F9; End Class</button>' +
       '</div>' +
       '<div id="class-session-summary" style="display:none;"></div>' +
       '<div style="display:flex;gap:10px;margin-top:8px;">' +
@@ -10985,10 +11361,9 @@ function openOtherStudentClassModal(studentId, studentName) {
 }
 
 function closeOtherClassModal() {
-  if (_classTimerInterval) { clearInterval(_classTimerInterval); _classTimerInterval = null; }
-  _classStartTime = null;
   const modal = document.getElementById('modal-other-class');
   if (modal) modal.remove();
+  if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
 }
 
 function startClassTimer(studentId, studentName) {
@@ -10998,7 +11373,22 @@ function startClassTimer(studentId, studentName) {
     instructorEl && instructorEl.focus();
     return;
   }
+
+  const activeSession = loadActiveOtherClassSession();
+  if (activeSession && String(activeSession.studentId) !== String(studentId)) {
+    alert('A different class is already active. End that session before starting a new one.');
+    return;
+  }
+
+  const instructorName = instructorEl.value.trim();
   _classStartTime = new Date();
+  saveActiveOtherClassSession({
+    studentId: String(studentId),
+    studentName: studentName,
+    instructorName: instructorName,
+    startTime: _classStartTime.toISOString()
+  });
+
   const startBtn = document.getElementById('btn-start-class');
   const endBtn   = document.getElementById('btn-end-class');
   const status   = document.getElementById('class-timer-status');
@@ -11008,18 +11398,19 @@ function startClassTimer(studentId, studentName) {
   if (status)   status.textContent = 'Class in progress… started at ' + _classStartTime.toLocaleTimeString('en-IN');
   if (instInput) instInput.disabled = true;
 
-  _classTimerInterval = setInterval(function() {
-    const elapsed = Math.floor((Date.now() - _classStartTime.getTime()) / 1000);
-    const h = Math.floor(elapsed / 3600);
-    const m = Math.floor((elapsed % 3600) / 60);
-    const s = elapsed % 60;
-    const display = document.getElementById('class-timer-display');
-    if (display) display.textContent =
-      String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-  }, 1000);
+  startClassTimerInterval();
+  updateClassTimerDisplay();
 }
 
 async function endClassTimer(studentId, studentName) {
+  const activeSession = loadActiveOtherClassSession();
+  if (activeSession) {
+    studentId = String(activeSession.studentId);
+    studentName = activeSession.studentName || studentName;
+    if (!_classStartTime && activeSession.startTime) {
+      _classStartTime = new Date(activeSession.startTime);
+    }
+  }
   if (!_classStartTime) return;
   clearInterval(_classTimerInterval);
   _classTimerInterval = null;
@@ -11033,7 +11424,7 @@ async function endClassTimer(studentId, studentName) {
   const s = durationSec % 60;
   const durationStr = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
 
-  const instructorName = document.getElementById('other-class-instructor')?.value.trim() || '';
+  const instructorName = document.getElementById('other-class-instructor')?.value.trim() || activeSession?.instructorName || '';
   const today = endTime.toISOString().split('T')[0];
 
   // Build session record
@@ -11053,20 +11444,46 @@ async function endClassTimer(studentId, studentName) {
 
   // Save to Firebase
   let saved = false;
+  const localStudent = (data.students||[]).find(function(x) {
+    return String(x.id) === String(studentId) || String(x.firebaseId) === String(studentId) || String(x.studentId) === String(studentId);
+  }) || null;
+  if (localStudent) {
+    const currentClasses = (localStudent.classes || 0);
+    const maxClasses = localStudent.totalClasses || 27;
+    const updatedClasses = currentClasses + 1;
+    localStudent.classes = updatedClasses;
+    if (updatedClasses >= maxClasses) localStudent.status = 'Completed';
+  }
+
   if (typeof db !== 'undefined' && currentSchoolId) {
     try {
       // Save session log
       await db.collection('schools').doc(currentSchoolId).collection('classSessions').add(sessionRecord);
-      // Update student classes count
-      const student = (data.students||[]).find(function(x){ return String(x.firebaseId||x.id)===String(studentId); });
-      if (student) {
-        const newClasses = (student.classes||0) + 1;
-        await db.collection('schools').doc(currentSchoolId).collection('students').doc(String(studentId)).update({ classes: newClasses });
-        student.classes = newClasses;
+
+      // Determine Firestore student doc id (prefer local student record mapping)
+      const student = (data.students||[]).find(function(x) {
+        return String(x.id) === String(studentId) || String(x.firebaseId) === String(studentId) || String(x.studentId) === String(studentId);
+      }) || null;
+      const firestoreDocId = student ? (String(student.id || student.firebaseId)) : String(studentId);
+
+      // Reuse existing instructor completion logic to update classes reliably
+      try {
+        await updateClasses(firestoreDocId);
+        saved = true;
+      } catch(updErr) {
+        console.warn('updateClasses failed after saving session:', updErr.message);
       }
-      saved = true;
-    } catch(e) { console.error('Session save failed:', e.message); }
+    } catch(e) {
+      console.error('Session save failed:', e.message);
+    }
   }
+
+  // Refresh the current student views after the class session is saved
+  if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
+  if (typeof renderInstructorStudents === 'function') renderInstructorStudents();
+  if (typeof renderStudentAttLog === 'function') renderStudentAttLog();
+  if (typeof renderStudentsTable === 'function') renderStudentsTable();
+  if (typeof renderDashboard === 'function') renderDashboard();
 
   // Show summary
   const endBtn   = document.getElementById('btn-end-class');
@@ -11092,7 +11509,9 @@ async function endClassTimer(studentId, studentName) {
         '</div>' +
       '</div>';
   }
+  clearActiveOtherClassSession();
   _classStartTime = null;
+  if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
   showToast('&#x2705; Class session recorded — ' + durationStr + ' (' + durationMin + ' min)');
   addNotification('Class session for ' + studentName + ' by ' + instructorName + ' — ' + durationStr, 'success');
 }
@@ -11251,41 +11670,72 @@ async function saveEditStudent(studentId) {
 // ============================================================
 // INVOICE GENERATION
 // ============================================================
+
+async function getNextInvoiceNumber() {
+  try {
+    const schoolRef = db.collection('schools').doc(currentSchoolId);
+    const result = await db.runTransaction(async (tx) => {
+      const schoolDoc = await tx.get(schoolRef);
+      if (!schoolDoc.exists) {
+        return { counter: 1000, prefix: 'INV-' };
+      }
+      const data = schoolDoc.data();
+      const currentCounter = data.invoiceCounter || (data.invoiceStartingNumber || 1000);
+      const prefix = data.invoicePrefix || 'INV-';
+      const nextCounter = currentCounter + 1;
+      tx.update(schoolRef, {
+        invoiceCounter: nextCounter,
+        lastInvoiceDate: new Date().toISOString()
+      });
+      return { counter: currentCounter, prefix };
+    });
+    return result;
+  } catch (error) {
+    console.error('Error getting invoice number:', error);
+    return { counter: 1000, prefix: 'INV-' };
+  }
+}
+
 function generateStudentInvoice(id) {
   const studentId = String(id);
   const s = data.students.find(function(x){ return String(x.firebaseId)===studentId||String(x.id)===studentId; });
   if (!s) { showToast('Student not found'); return; }
-  const totalFee = s.totalFee||0;
-  const paid = s.paid||0;
-  const balance = totalFee - paid;
-  const installments = s.installments||[];
-  const invoiceNo = 'INV-' + (s.firebaseId||s.id||'').toString().slice(-6).toUpperCase() + '-' + Date.now().toString().slice(-4);
-  const today = new Date().toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
-  const schoolName = (userSchools.find(function(sc){return sc.id===currentSchoolId;})||{}).name || 'First Gear School';
+  
+  // Generate invoice asynchronously for auto-increment
+  (async function() {
+    try {
+      const invoiceData = await getNextInvoiceNumber();
+      const invoiceNo = invoiceData.prefix + String(invoiceData.counter).padStart(6, '0');
+      const totalFee = s.totalFee||0;
+      const paid = s.paid||0;
+      const balance = totalFee - paid;
+      const installments = s.installments||[];
+      const today = new Date().toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
+      const schoolName = (userSchools.find(function(sc){return sc.id===currentSchoolId;})||{}).name || 'First Gear School';
 
-  // Build installments table rows
-  let instRows = '';
-  if (installments.length > 0) {
-    installments.forEach(function(inst, idx) {
-      const bg = idx%2===0 ? 'white' : 'var(--surface2)';
-      instRows += '<tr style="border-bottom:1px solid var(--border);background:' + bg + '">' +
-        '<td style="padding:8px 12px;">' + inst.date + '</td>' +
-        '<td style="padding:8px 12px;color:var(--success);font-weight:600;">\u20b9' + (inst.amount||0).toLocaleString() + '</td>' +
-        '<td style="padding:8px 12px;">' + (inst.mode||'Cash') + '</td>' +
-        '<td style="padding:8px 12px;color:var(--text2);">' + (inst.note||'\u2014') + '</td></tr>';
-    });
-  }
-  const instSection = installments.length > 0
-    ? '<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="background:var(--surface2);"><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Amount</th><th style="padding:8px 12px;text-align:left;">Mode</th><th style="padding:8px 12px;text-align:left;">Note</th></tr></thead><tbody>' + instRows + '</tbody></table>'
-    : '<div style="text-align:center;padding:16px;color:var(--text2);background:var(--surface2);border-radius:8px;">No installments recorded yet</div>';
+      // Build installments table rows
+      let instRows = '';
+      if (installments.length > 0) {
+        installments.forEach(function(inst, idx) {
+          const bg = idx%2===0 ? 'white' : 'var(--surface2)';
+          instRows += '<tr style="border-bottom:1px solid var(--border);background:' + bg + '">' +
+            '<td style="padding:8px 12px;">' + inst.date + '</td>' +
+            '<td style="padding:8px 12px;color:var(--success);font-weight:600;">\u20b9' + (inst.amount||0).toLocaleString() + '</td>' +
+            '<td style="padding:8px 12px;">' + (inst.mode||'Cash') + '</td>' +
+            '<td style="padding:8px 12px;color:var(--text2);">' + (inst.note||'\u2014') + '</td></tr>';
+        });
+      }
+      const instSection = installments.length > 0
+        ? '<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="background:var(--surface2);"><th style="padding:8px 12px;text-align:left;">Date</th><th style="padding:8px 12px;text-align:left;">Amount</th><th style="padding:8px 12px;text-align:left;">Mode</th><th style="padding:8px 12px;text-align:left;">Note</th></tr></thead><tbody>' + instRows + '</tbody></table>'
+        : '<div style="text-align:center;padding:16px;color:var(--text2);background:var(--surface2);border-radius:8px;">No installments recorded yet</div>';
 
-  const balColor = balance>0 ? 'var(--danger)' : 'var(--success)';
-  const balLabel = balance>0 ? 'Balance Due (Pending)' : 'Fully Paid \u2713';
-  const emailRow = s.email ? '<div style="font-size:13px;color:var(--text2);">\u2709\ufe0f ' + s.email + '</div>' : '';
-  const addrRow = s.address ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + s.address + '</div>' : '';
+      const balColor = balance>0 ? 'var(--danger)' : 'var(--success)';
+      const balLabel = balance>0 ? 'Balance Due (Pending)' : 'Fully Paid \u2713';
+      const emailRow = s.email ? '<div style="font-size:13px;color:var(--text2);">\u2709\ufe0f ' + s.email + '</div>' : '';
+      const addrRow = s.address ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;">' + s.address + '</div>' : '';
 
-  let pendingBox = '';
-  if (balance > 0) {
+      let pendingBox = '';
+      if (balance > 0) {
     const nextInfo = installments.length > 0 ? 'Next installment due after ' + installments[installments.length-1].date + '.' : 'Please arrange payment at the earliest.';
     pendingBox = '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;margin-bottom:16px;">' +
       '<div style="font-weight:600;color:#92400e;margin-bottom:6px;">\u26a0\ufe0f Pending Balance</div>' +
@@ -11384,6 +11834,11 @@ function generateStudentInvoice(id) {
   modal.innerHTML = modalHTML;
   modal.addEventListener('click', function(e) { if(e.target===modal) modal.remove(); });
   document.body.appendChild(modal);
+    } catch (error) {
+      console.error('Error generating invoice:', error);
+      showToast('Error generating invoice: ' + error.message);
+    }
+  })();
 }
 
 function printInvoice() {
@@ -13203,6 +13658,7 @@ async function clearAllAdminsFromFirebase() {
     
     // Clear local data
     data.admins = [];
+    try { FGCache.invalidate(currentSchoolId, 'admins'); } catch(_e){}
     
     // Refresh display
     renderAdminsTable();
@@ -13940,6 +14396,7 @@ async function clearAllStaffFromFirebase() {
       // Update local data
       if (!data.staff) data.staff = [];
       data.staff = [];
+      try { FGCache.invalidate(currentSchoolId, 'staff'); } catch(_e){}
       
       // Refresh display
       renderStaffTable();
@@ -14482,6 +14939,7 @@ async function removeStaff(staffId) {
     
     // Update local data
     data.staff = data.staff.filter(s => s.id !== staffId);
+    try { FGCache.invalidate(currentSchoolId, 'staff'); } catch(_e){}
     
     renderStaffTable();
     addNotification(`Staff member "${staff.name}" has been removed`, 'info');
@@ -15205,6 +15663,7 @@ function openAddFormModal(formType) {
   document.getElementById('form-modal-title').textContent = '+ Add ' + _activeFormType + ' Record';
   var formTypeField = document.getElementById('fm-formType');
   if (formTypeField) formTypeField.value = _activeFormType;
+  updateFormTypeDisplay(_activeFormType);
   _showFormFields(_activeFormType);
   ['fm-serialNo','fm-candidateName','fm-phone','fm-address','fm-vehicleClass',
    'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice',
@@ -15234,6 +15693,7 @@ function editFormRecord(id) {
   document.getElementById('form-modal-title').textContent = '✏️ Edit ' + _activeFormType + ' Record';
   var formTypeField = document.getElementById('fm-formType');
   if (formTypeField) formTypeField.value = _activeFormType;
+  updateFormTypeDisplay(_activeFormType);
   _showFormFields(_activeFormType);
   function set(eid, val){ var el=document.getElementById(eid); if(el) el.value=val||''; }
   set('fm-serialNo',      f.serialNo);
@@ -15386,9 +15846,17 @@ function _showFormFields(formType) {
   if (f15) f15.style.display = formType === 'Form 15' ? '' : 'none';
 }
 
+function updateFormTypeDisplay(formType) {
+  var formTypeField = document.getElementById('fm-formType');
+  var formTypeDisplay = document.getElementById('fm-formType-display');
+  if (formTypeField) formTypeField.value = formType || 'Form 5';
+  if (formTypeDisplay) formTypeDisplay.textContent = formType || 'Form 5';
+}
+
 function changeActiveFormType(formType) {
   _activeFormType = formType || 'Form 5';
   document.getElementById('form-modal-title').textContent = (_editingFormId ? '✏️ Edit ' : '+ Add ') + _activeFormType + ' Record';
+  updateFormTypeDisplay(_activeFormType);
   _showFormFields(_activeFormType);
 }
 
@@ -15474,13 +15942,10 @@ function populateFormFromStudentId(value) {
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;align-items:flex-end;">
       <div class="form-group" style="flex:1;min-width:220px;margin-bottom:0;">
         <label>Form Type</label>
-        <select id="fm-formType" onchange="changeActiveFormType(this.value)">
-          <option value="Form 5">Form 5</option>
-          <option value="Form 14">Form 14</option>
-          <option value="Form 15">Form 15</option>
-        </select>
+        <input type="hidden" id="fm-formType" value="Form 5">
+        <div id="fm-formType-display" style="padding:12px 14px;border:1px solid var(--border);border-radius:6px;font-size:14px;background:var(--surface2);">Form 5</div>
       </div>
-      <div style="font-size:12px;color:#475569;flex:1;min-width:220px;">Choose the form type before entering details.</div>
+      <div style="font-size:12px;color:#475569;flex:1;min-width:220px;">Form type is fixed by the registry page and cannot be changed here.</div>
     </div>
 
     <!-- Common fields -->
