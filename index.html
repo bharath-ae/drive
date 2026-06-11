@@ -1754,6 +1754,8 @@
         <div class="form-group"><label>Class Time (optional)</label>
           <input type="time" id="qs-class-time" placeholder="e.g. 10:30">
         </div>
+        <div class="form-group"><label>Form 15 Start Date</label><input type="date" id="qs-form15-start"></div>
+        <div class="form-group"><label>Form 15 End Date</label><input type="date" id="qs-form15-end"></div>
         <div class="form-group"><label>Total Classes</label><input type="number" id="qs-total-classes" placeholder="e.g. 27" value="27" min="1"></div>
         <!-- Schedule during enrollment -->
         <div class="form-group full" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;margin-top:4px;">
@@ -7262,7 +7264,7 @@ function openAddStudentModal() {
   // ── Clear ALL form fields first ──────────────────────────────
   const textFields = [
     'qs-name','qs-phone','qs-dob','qs-email','qs-address','qs-aadhaar',
-    'qs-emergency','qs-class-time','qs-notes','qs-fee','qs-paid',
+    'qs-emergency','qs-class-time','qs-form15-start','qs-form15-end','qs-notes','qs-fee','qs-paid',
     'qs-schedule-start','qs-form-no'
   ];
   textFields.forEach(function(id) {
@@ -7354,6 +7356,8 @@ async function addStudentFromModal() {
       instructorEmail: qsInstValue || '',
       instructorName: qsInstName || '',
       classTime: document.getElementById('qs-class-time') ? document.getElementById('qs-class-time').value : '',
+      form15Start: document.getElementById('qs-form15-start')?.value||'',
+      form15End: document.getElementById('qs-form15-end')?.value||'',
       classes: 0,
       totalClasses,
       totalFee: parseInt(document.getElementById('qs-fee').value)||0,
@@ -11137,6 +11141,8 @@ function openEditStudentModal(s) {
           </select>
         </div>
         <div class="form-group"><label>Class Time</label><input type="time" id="edit-s-classtime" value="${s.classTime||''}"></div>
+        <div class="form-group"><label>Form 15 Start Date</label><input type="date" id="edit-s-form15-start" value="${s.form15Start||''}"></div>
+        <div class="form-group"><label>Form 15 End Date</label><input type="date" id="edit-s-form15-end" value="${s.form15End||''}"></div>
         <div class="form-group"><label>Total Classes</label><input type="number" id="edit-s-total-classes" value="${s.totalClasses||27}"></div>
         <div class="form-group"><label>Classes Done</label><input type="number" id="edit-s-classes" value="${s.classes||0}"></div>
         <div class="form-group"><label>Total Fee (₹)</label><input type="number" id="edit-s-fee" value="${s.totalFee||0}"></div>
@@ -11147,6 +11153,18 @@ function openEditStudentModal(s) {
           </select>
         </div>
         <div class="form-group"><label>Enrollment Date</label><input type="date" id="edit-s-enrolled" value="${s.enrolled||''}"></div>
+        <div class="form-group full"><label>Instructor Signature</label>
+          ${s.instructorSignatureUrl ? `<img src="${s.instructorSignatureUrl}" style="max-height:60px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:block;">` : ''}
+          <input type="file" id="edit-s-instructor-signature" accept="image/*" style="font-size:13px;">
+          ${s.instructorSignatureUrl ? `<button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="document.getElementById('edit-s-instructor-sig-clear').value='1';this.textContent='✓ Will be cleared on save';">🗑 Remove</button>` : ''}
+          <input type="hidden" id="edit-s-instructor-sig-clear" value="">
+        </div>
+        <div class="form-group full"><label>Trainee Signature</label>
+          ${s.traineeSignatureUrl ? `<img src="${s.traineeSignatureUrl}" style="max-height:60px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:block;">` : ''}
+          <input type="file" id="edit-s-trainee-signature" accept="image/*" style="font-size:13px;">
+          ${s.traineeSignatureUrl ? `<button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="document.getElementById('edit-s-trainee-sig-clear').value='1';this.textContent='✓ Will be cleared on save';">🗑 Remove</button>` : ''}
+          <input type="hidden" id="edit-s-trainee-sig-clear" value="">
+        </div>
         <div class="form-group full"><label>Notes</label><textarea id="edit-s-notes" style="min-height:60px;">${s.notes||''}</textarea></div>
       </div>
     </div>
@@ -11178,6 +11196,8 @@ async function saveEditStudent(studentId) {
     instructorEmail: instEmail,
     instructor: instName,
     classTime: document.getElementById('edit-s-classtime')?.value||'',
+    form15Start: document.getElementById('edit-s-form15-start')?.value||'',
+    form15End: document.getElementById('edit-s-form15-end')?.value||'',
     totalClasses: parseInt(document.getElementById('edit-s-total-classes')?.value)||27,
     classes: parseInt(document.getElementById('edit-s-classes')?.value)||0,
     totalFee: parseInt(document.getElementById('edit-s-fee')?.value)||0,
@@ -11186,6 +11206,14 @@ async function saveEditStudent(studentId) {
     enrolled: document.getElementById('edit-s-enrolled')?.value||'',
     notes: document.getElementById('edit-s-notes')?.value||''
   };
+  const instSigClear = document.getElementById('edit-s-instructor-sig-clear')?.value === '1';
+  const traineeSigClear = document.getElementById('edit-s-trainee-sig-clear')?.value === '1';
+  const instFile = document.getElementById('edit-s-instructor-signature')?.files?.[0];
+  const traineeFile = document.getElementById('edit-s-trainee-signature')?.files?.[0];
+  if (instSigClear) { updates.instructorSignatureUrl = ''; }
+  else if (instFile) { updates.instructorSignatureUrl = await readFileAsDataURL(instFile); }
+  if (traineeSigClear) { updates.traineeSignatureUrl = ''; }
+  else if (traineeFile) { updates.traineeSignatureUrl = await readFileAsDataURL(traineeFile); }
   try {
     if (currentSchoolId && typeof db !== 'undefined') {
       await db.collection('schools').doc(currentSchoolId).collection('students').doc(String(studentId)).update(updates);
@@ -11302,9 +11330,16 @@ function generateStudentInvoice(id) {
           '</tfoot>' +
         '</table>' +
       '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;padding-top:18px;border-top:1px solid #e2e8f0;font-size:13px;color:#475569;">' +
-        '<div>Invoice generated by ' + schoolName + '.</div>' +
-        '<div style="text-align:right;">Generated on ' + today + '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:24px;padding-top:18px;border-top:1px solid #e2e8f0;">' +
+        '<div style="min-height:90px;padding:18px;border:1px dashed #cbd5e1;border-radius:14px;">' +
+          '<div style="font-size:12px;font-weight:700;color:#0f172a;margin-bottom:10px;">Authorized Signature</div>' +
+          '<div style="height:40px;border-bottom:1px solid #cbd5e1;margin-bottom:6px;"></div>' +
+          '<div style="font-size:12px;color:#64748b;">Signatory name and stamp</div>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px;font-size:13px;color:#475569;text-align:right;">' +
+          '<div>Invoice generated by ' + schoolName + '.</div>' +
+          '<div>Generated on ' + today + '</div>' +
+        '</div>' +
       '</div>' +
     '</div>';  const modalHTML =
     '<div class="modal" style="width:700px;max-width:96vw;max-height:90vh;overflow-y:auto;">' +
@@ -11503,13 +11538,12 @@ function renderFormsRegistry(formType) {
     ? '<tr><td colspan="' + (isForm5?9:10) + '" style="text-align:center;padding:30px;color:var(--text2);">No records yet. Click "+ Add" to create one.</td></tr>'
     : allForms.map(function(f, idx) {
         const fid = f.firebaseId || f.id || '';
+        const printButton = '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\', \'' + ftCode + '\')">🖨️ Print</button>';
+        const editButton = `<button class="btn btn-outline btn-sm" onclick="editFormRecord('${fid}')">✏️</button>`;
+        const deleteButton = currentRole==='owner' ? `<button class="btn btn-danger btn-sm" onclick="deleteFormRecord('${fid}')">🗑</button>` : '';
         const actionBtns = canEdit
-          ? '<div style="display:flex;gap:4px;">' +
-              '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\',ftCode)">\uD83D\uDDA8 Print</button>' +
-              '<button class="btn btn-outline btn-sm" onclick="editFormRecord(\'' + fid + '\')">✏️</button>' +
-              (currentRole==='owner' ? '<button class="btn btn-danger btn-sm" onclick="deleteFormRecord(\'' + fid + '\')">🗑</button>' : '') +
-            '</div>'
-          : '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\',ftCode)">\uD83D\uDDA8 Print</button>';
+          ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${printButton}${editButton}${deleteButton}</div>`
+          : printButton;
 
         if (isForm5) {
           return '<tr>' +
@@ -11545,7 +11579,7 @@ function renderFormsRegistry(formType) {
         '<h2>' + icon + ' ' + formType + ' Registry</h2>' +
         '<p style="font-size:12px;color:var(--text2);">' + ruleRef + ' · ' + schoolName + '</p>' +
       '</div>' +
-      (canEdit ? '<button class="btn btn-primary" onclick="openAddFormModal(\'' + formType + '\')">+ Add ' + formType + ' Record</button>' : '') +
+      '<button class="btn btn-primary" onclick="openAddFormModal(\'' + formType + '\')">+ Add ' + formType + ' Record</button>' +
     '</div>' +
 
     // School info banner — auto-filled
@@ -11585,6 +11619,8 @@ function renderForm15Registry() {
 
   const totalRecords = students.length;
 
+  const canEdit = currentRole === 'owner' || currentRole === 'office';
+
   // Build student rows
   const studentRows = students.length === 0 ? '' : students.map(function(s, i) {
     const sid = s.firebaseId || s.id || '';
@@ -11598,6 +11634,7 @@ function renderForm15Registry() {
       '<td style="font-size:12px;">' + (s.enrolled || '—') + '</td>' +
       '<td><span class="badge badge-blue">Student</span></td>' +
       '<td>' +
+        (canEdit ? '<button class="btn btn-outline btn-sm" onclick="editStudent(\'' + sid + '\')" style="white-space:nowrap;margin-right:6px;">✏️ Edit</button>' : '') +
         '<button class="btn btn-accent btn-sm" onclick="printForm15ForStudent(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button>' +
       '</td>' +
     '</tr>';
@@ -11653,6 +11690,7 @@ function filterForm15Registry(query) {
     return (s.name||'').toLowerCase().includes(q) || (s.phone||'').includes(q) || (s.codeNo||'').toLowerCase().includes(q);
   }) : students;
 
+  const canEdit = currentRole === 'owner' || currentRole === 'office';
   const studentRows = filteredStudents.map(function(s, i) {
     const sid = s.firebaseId || s.id || '';
     return '<tr>' +
@@ -11664,7 +11702,10 @@ function filterForm15Registry(query) {
       '<td style="font-size:12px;">' + (s.vehicle || '—') + '</td>' +
       '<td style="font-size:12px;">' + (s.enrolled || '—') + '</td>' +
       '<td><span class="badge badge-blue">Student</span></td>' +
-      '<td><button class="btn btn-accent btn-sm" onclick="printForm15ForStudent(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button></td>' +
+      '<td>' +
+        (canEdit ? '<button class="btn btn-outline btn-sm" onclick="editStudent(\'' + sid + '\')" style="white-space:nowrap;margin-right:6px;">✏️ Edit</button>' : '') +
+        '<button class="btn btn-accent btn-sm" onclick="printForm15ForStudent(\'' + sid + '\')" style="white-space:nowrap;">🖨️ Print Form 15</button>' +
+      '</td>' +
     '</tr>';
   }).join('');
 
@@ -11783,7 +11824,15 @@ function printFormRecord(id, formTypeCode) {
   <table class="reg">
     <tr><td class="label">Enrolled Year (ನೋಂದಣಿಯಾದ ವರ್ಷ)</td><td class="value">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td></tr>
     <tr><td class="label">1. Registration Number (ನೋಂದಣಿ ಸಂಖ್ಯೆ)</td><td class="value">${f.serialNo||''}</td></tr>
-    <tr><td class="label">2. Name of Trainee (ತರಬೇತಿದಾರರ ಹೆಸರು ಮತ್ತು ಭಾವಚಿತ್ರ)</td><td class="value">${f.candidateName||''}</td></tr>
+    <tr>
+      <td class="label">2. Name of Trainee (ತರಬೇತಿದಾರರ ಹೆಸರು ಮತ್ತು ಭಾವಚಿತ್ರ)</td>
+      <td class="value" style="display:flex;gap:12px;align-items:flex-start;">
+        <div style="flex:1;">${f.candidateName||''}</div>
+        <div style="width:120px;height:150px;border:1px solid #333;display:flex;align-items:center;justify-content:center;background:#fff;">
+          ${f.photoDataUrl ? '<img src="'+f.photoDataUrl+'" style="max-width:100%;max-height:100%;display:block;" alt="Trainee photo"/>' : '<span style="font-size:11px;color:#555;text-align:center;line-height:1.4;">Photo<br>to be<br>attached</span>'}
+        </div>
+      </td>
+    </tr>
     <tr><td class="label">3. Son/Wife/Daughter (ಮಗ/ಹೆಂಡತಿ/ಮಗಳು)</td><td class="value">${f.guardianName||''}</td></tr>
     <tr>
       <td class="label">4. Address (ವಿಳಾಸ ವಿಕಾಸ)<br>
@@ -11974,18 +12023,59 @@ function printForm15ForStudent(studentId) {
   const licenseNo     = school.licenseNo || school.license || '';
   const principal     = school.principal || school.ownerName || '';
   const signatureUrl  = school.signatureUrl || school.stampUrl || '';
+  const instructorSig = student.instructorSignatureUrl || signatureUrl || '';
+  const traineeSig = student.traineeSignatureUrl || '';
 
-  const rows31 = Array.from({length:31}, function(_,i){
-    return `<tr>
-      <td style="text-align:center;padding:3px 2px;font-size:11px;">${i+1}</td>
-      <td style="padding:3px 2px;"></td>
-      <td style="padding:3px 2px;"></td>
-      <td style="padding:3px 2px;"></td>
-      <td style="padding:3px 2px;"></td>
-      <td style="padding:3px 2px;"></td>
-      <td style="padding:3px 2px;"></td>
-    </tr>`;
-  }).join('');
+  const buildSchedule = function() {
+    var start = student.form15Start ? new Date(student.form15Start) : null;
+    var end   = student.form15End ? new Date(student.form15End) : null;
+    var valid = start && end && !isNaN(start.getTime()) && !isNaN(end.getTime()) && end >= start;
+    var rows = [];
+    var classCount = 0;
+    var leaveCount = 0;
+    var sundayCount = 0;
+    if (valid) {
+      var current = new Date(start);
+      while (current <= end && rows.length < 31) {
+        var day = current.getDay();
+        var note = '';
+        if (day === 0) { sundayCount++; note = 'Sunday'; }
+        else if (leaveCount < 5) { leaveCount++; note = 'Leave'; }
+        else if (classCount < 20) { classCount++; note = 'Class'; }
+        else { note = 'Off'; }
+        var dateText = current.toLocaleDateString('en-IN', { day:'2-digit', month:'2-digit', year:'numeric' });
+        var vehicleText = note === 'Class' ? (student.vehicle || '') : note;
+        var instrCell = instructorSig ? '<img src="' + instructorSig + '" style="max-height:24px;max-width:80px;display:block;margin:0 auto;">' : '';
+        var traineeCell = traineeSig ? '<img src="' + traineeSig + '" style="max-height:24px;max-width:80px;display:block;margin:0 auto;">' : '';
+        rows.push(`<tr>
+          <td style="text-align:center;padding:3px 2px;font-size:11px;">${rows.length+1}</td>
+          <td style="padding:3px 2px;">${dateText}</td>
+          <td style="padding:3px 2px;"></td>
+          <td style="padding:3px 2px;"></td>
+          <td style="padding:3px 2px;">${vehicleText}</td>
+          <td style="padding:3px 2px;text-align:center;">${instrCell}</td>
+          <td style="padding:3px 2px;text-align:center;">${traineeCell}</td>
+        </tr>`);
+        current.setDate(current.getDate() + 1);
+      }
+    }
+    while (rows.length < 31) {
+      rows.push(`<tr>
+        <td style="text-align:center;padding:3px 2px;font-size:11px;">${rows.length+1}</td>
+        <td style="padding:3px 2px;"></td>
+        <td style="padding:3px 2px;"></td>
+        <td style="padding:3px 2px;"></td>
+        <td style="padding:3px 2px;"></td>
+        <td style="padding:3px 2px;"></td>
+        <td style="padding:3px 2px;"></td>
+      </tr>`);
+    }
+    var summary = valid
+      ? 'Training schedule from ' + start.toLocaleDateString('en-IN') + ' to ' + end.toLocaleDateString('en-IN') + ': ' + classCount + ' classes, ' + leaveCount + ' leave days, ' + sundayCount + ' Sundays.'
+      : 'Start and end date are required to auto-fill Form 15 training days.';
+    return { rows: rows.join(''), summary: summary };
+  };
+  var schedule = buildSchedule();
 
   const form15HTML = `<!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>Form 15 — ${student.name||''}</title>
@@ -12031,16 +12121,21 @@ function printForm15ForStudent(studentId) {
     <span>Name of the Trainee:</span>
     <span class="field-line" style="font-size:12px;">${student.name||''}</span>
   </div>
-  <div style="display:flex;gap:10px;margin-top:3px;">
-    <div class="field-row" style="flex:1;">
+  <div style="display:flex;gap:10px;margin-top:3px;flex-wrap:wrap;">
+    <div class="field-row" style="flex:1;min-width:180px;">
       <span style="white-space:nowrap;">Enrolment No.:</span>
       <span class="field-line">${student.codeNo||student.serialNo||''}</span>
     </div>
-    <div class="field-row" style="flex:1;">
+    <div class="field-row" style="flex:1;min-width:180px;">
       <span style="white-space:nowrap;">Date of Enrolment:</span>
       <span class="field-line">${student.enrolled||''}</span>
     </div>
+    <div class="field-row" style="flex:1;min-width:180px;">
+      <span style="white-space:nowrap;">Training Period:</span>
+      <span class="field-line">${student.form15Start||''} — ${student.form15End||''}</span>
+    </div>
   </div>
+  <div style="font-size:11px;color:#555;margin-top:4px;">${schedule.summary}</div>
 
   <table class="training">
     <thead>
@@ -12058,7 +12153,7 @@ function printForm15ForStudent(studentId) {
       </tr>
     </thead>
     <tbody>
-      ${rows31}
+      ${schedule.rows}
     </tbody>
   </table>
 
@@ -12750,6 +12845,7 @@ function generateServiceInvoice(id) {
             <div><strong style="color:#0f172a;">Vehicle Class</strong><br>${svc.vehicleClass||'—'}</div>
             <div style="grid-column:1/-1;"><strong style="color:#0f172a;">Service Type</strong><br>${svc.serviceType||'—'}</div>
             <div><strong style="color:#0f172a;">Date</strong><br>${svc.date||'—'}</div>
+            <div><strong style="color:#0f172a;">Vehicle No</strong><br>${svc.vehicleNumber||'—'}</div>
             <div><strong style="color:#0f172a;">Description</strong><br>${svc.description||'—'}</div>
           </div>
         </div>
@@ -12804,9 +12900,16 @@ function generateServiceInvoice(id) {
         </table>
       </div>` : ''}
 
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;color:#64748b;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap;">
-        <div>Thank you for choosing First Gear Driving School.</div>
-        <div>Generated on ${today}</div>
+      <div style="border-top:1px solid #e2e8f0;padding-top:24px;margin-bottom:24px;display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+        <div style="min-height:90px;padding:18px;border:1px dashed #cbd5e1;border-radius:14px;">
+          <div style="font-size:12px;font-weight:700;color:#0f172a;margin-bottom:10px;">Authorized Signature</div>
+          <div style="height:40px;border-bottom:1px solid #cbd5e1;margin-bottom:6px;"></div>
+          <div style="font-size:12px;color:#64748b;">Signatory name and stamp</div>
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px;font-size:12px;color:#64748b;">
+          <div>Thank you for choosing First Gear Driving School.</div>
+          <div>Generated on ${today}</div>
+        </div>
       </div>
     </div>
   </div>`;
@@ -15071,17 +15174,31 @@ async function startImport() {
 
 let _editingFormId  = null;
 let _activeFormType = 'Form 5';
+let _formPhotoDataURL = '';
 
 function openAddFormModal(formType) {
   _editingFormId  = null;
   _activeFormType = formType || 'Form 5';
+  if (!currentSchoolId && userSchools.length === 1) {
+    currentSchoolId = userSchools[0].id;
+    if (typeof FirebaseService !== 'undefined' && FirebaseService.setSchool) FirebaseService.setSchool(currentSchoolId);
+  }
   document.getElementById('form-modal-title').textContent = '+ Add ' + _activeFormType + ' Record';
+  var formTypeField = document.getElementById('fm-formType');
+  if (formTypeField) formTypeField.value = _activeFormType;
   _showFormFields(_activeFormType);
   ['fm-serialNo','fm-candidateName','fm-phone','fm-address','fm-vehicleClass',
    'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice',
-   'fm-guardianName','fm-dob','fm-enrollDate','fm-endDate14'].forEach(function(id){
+   'fm-guardianName','fm-dob','fm-enrollDate','fm-endDate14',
+   'fm-form15-startDate','fm-form15-endDate','fm-form15-instructor','fm-form15-rtoOffice'].forEach(function(id){
     var el = document.getElementById(id); if (el) el.value = '';
   });
+  var photoInput = document.getElementById('fm-photo'); if (photoInput) photoInput.value = '';
+  var photoPreview = document.getElementById('fm-photo-preview'); if (photoPreview) photoPreview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
+  _formPhotoDataURL = '';
+  var school = getCurrentSchool() || {};
+  var infoText = school.name ? school.name + (school.address ? ' · ' + school.address : '') : 'No school selected';
+  var infoEl = document.getElementById('form-school-info'); if (infoEl) infoEl.textContent = 'School: ' + infoText;
   document.getElementById('fm-status').value = 'Pending';
   openModal('modal-add-form');
 }
@@ -15089,9 +15206,15 @@ function openAddFormModal(formType) {
 function editFormRecord(id) {
   var f = (data.forms||[]).find(function(x){ return (x.firebaseId||x.id)===id; });
   if (!f) { showToast('Record not found'); return; }
+  if (!currentSchoolId && f.schoolId) {
+    currentSchoolId = f.schoolId;
+    if (typeof FirebaseService !== 'undefined' && FirebaseService.setSchool) FirebaseService.setSchool(f.schoolId);
+  }
   _editingFormId  = id;
   _activeFormType = f.formType || 'Form 5';
   document.getElementById('form-modal-title').textContent = '✏️ Edit ' + _activeFormType + ' Record';
+  var formTypeField = document.getElementById('fm-formType');
+  if (formTypeField) formTypeField.value = _activeFormType;
   _showFormFields(_activeFormType);
   function set(eid, val){ var el=document.getElementById(eid); if(el) el.value=val||''; }
   set('fm-serialNo',      f.serialNo);
@@ -15105,21 +15228,45 @@ function editFormRecord(id) {
     set('fm-startDate',     f.startDate);
     set('fm-endDate',       f.endDate);
     set('fm-rtoOffice',     f.rtoOffice);
+  } else if (_activeFormType === 'Form 15') {
+    set('fm-form15-startDate',   f.startDate);
+    set('fm-form15-endDate',     f.endDate);
+    set('fm-form15-instructor',  f.instructorName);
+    set('fm-form15-rtoOffice',   f.rtoOffice);
   } else {
+    // Form 14
     set('fm-guardianName',  f.guardianName);
     set('fm-dob',           f.dob);
     set('fm-enrollDate',    f.enrollDate);
     set('fm-endDate14',     f.endDate);
+    var photoPreview = document.getElementById('fm-photo-preview');
+    var photoInput = document.getElementById('fm-photo');
+    if (photoInput) photoInput.value = '';
+    if (f.photoDataUrl) {
+      _formPhotoDataURL = f.photoDataUrl;
+      if (photoPreview) photoPreview.innerHTML = '<img src="' + f.photoDataUrl + '" style="max-width:100%;max-height:150px;border:1px solid #ccc;border-radius:4px;display:block;">';
+    } else if (photoPreview) {
+      _formPhotoDataURL = '';
+      photoPreview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
+    }
   }
+  var school = getCurrentSchool() || {};
+  var infoText = school.name ? school.name + (school.address ? ' · ' + school.address : '') : 'No school selected';
+  var infoEl = document.getElementById('form-school-info'); if (infoEl) infoEl.textContent = 'School: ' + infoText;
   openModal('modal-add-form');
 }
 
 async function deleteFormRecord(id) {
   if (!confirm('Delete this form record? This cannot be undone.')) return;
+  var dbReady = (typeof db !== 'undefined' && db !== null);
   try {
-    if (currentSchoolId) { await db.collection('forms').doc(id).delete(); }
+    if (currentSchoolId && dbReady) { await db.collection('forms').doc(id).delete(); }
     data.forms = (data.forms||[]).filter(function(f){ return (f.firebaseId||f.id)!==id; });
-    renderFormsRegistry(_activeFormType);
+    if (_activeFormType === 'Form 5' || _activeFormType === 'Form 14') {
+      renderFormsRegistry(_activeFormType);
+    } else if (_activeFormType === 'Form 15') {
+      if (typeof renderForm15Registry === 'function') renderForm15Registry();
+    }
     addNotification('Form record deleted', 'info');
   } catch(err) {
     console.error('Delete form error:', err);
@@ -15131,9 +15278,22 @@ async function saveFormRecord() {
   var get = function(id){ var el=document.getElementById(id); return el?el.value.trim():''; };
   var candidateName = get('fm-candidateName');
   if (!candidateName) { alert('Candidate Name is required.'); return; }
+  var selectedSchoolId = currentSchoolId || (userSchools.length === 1 ? userSchools[0].id : '');
+  if (!selectedSchoolId && userSchools.length > 0) {
+    selectedSchoolId = userSchools[0].id;
+  }
+  if (!currentSchoolId && selectedSchoolId) {
+    currentSchoolId = selectedSchoolId;
+    if (typeof FirebaseService !== 'undefined' && FirebaseService.setSchool) FirebaseService.setSchool(selectedSchoolId);
+  }
+  if (!selectedSchoolId) {
+    alert('Please select a school before saving the form.');
+    return;
+  }
+
   var record = {
     formType:      _activeFormType,
-    schoolId:      currentSchoolId || '',
+    schoolId:      selectedSchoolId,
     serialNo:      get('fm-serialNo'),
     candidateName: candidateName,
     phone:         get('fm-phone'),
@@ -15147,22 +15307,35 @@ async function saveFormRecord() {
     record.startDate     = get('fm-startDate');
     record.endDate       = get('fm-endDate');
     record.rtoOffice     = get('fm-rtoOffice');
+  } else if (_activeFormType === 'Form 15') {
+    record.startDate     = get('fm-form15-startDate');
+    record.endDate       = get('fm-form15-endDate');
+    record.instructorName = get('fm-form15-instructor');
+    record.rtoOffice     = get('fm-form15-rtoOffice');
   } else {
+    // Form 14
     record.guardianName  = get('fm-guardianName');
     record.dob           = get('fm-dob');
     record.enrollDate    = get('fm-enrollDate');
     record.endDate       = get('fm-endDate14');
+    if (_formPhotoDataURL) {
+      record.photoDataUrl = _formPhotoDataURL;
+    } else if (_editingFormId) {
+      var existingForm = (data.forms || []).find(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
+      if (existingForm && existingForm.photoDataUrl) record.photoDataUrl = existingForm.photoDataUrl;
+    }
   }
+  var dbReady = (typeof db !== 'undefined' && db !== null);
   try {
     if (_editingFormId) {
-      if (currentSchoolId) { await db.collection('forms').doc(_editingFormId).update(record); }
+      if (selectedSchoolId && dbReady) { await db.collection('forms').doc(_editingFormId).update(record); }
       var idx = (data.forms||[]).findIndex(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
       if (idx !== -1) data.forms[idx] = Object.assign({}, data.forms[idx], record);
       addNotification(_activeFormType + ' record updated', 'success');
     } else {
       record.createdAt = new Date().toISOString();
       var newId = 'frm_' + Date.now();
-      if (currentSchoolId) {
+      if (selectedSchoolId && dbReady) {
         var docRef = await db.collection('forms').add(record);
         newId = docRef.id;
       }
@@ -15173,7 +15346,12 @@ async function saveFormRecord() {
       addNotification(_activeFormType + ' record added', 'success');
     }
     closeModal('modal-add-form');
-    renderFormsRegistry(_activeFormType);
+    // Refresh the correct registry page after save
+    if (_activeFormType === 'Form 5' || _activeFormType === 'Form 14') {
+      renderFormsRegistry(_activeFormType);
+    } else if (_activeFormType === 'Form 15') {
+      if (typeof renderForm15Registry === 'function') renderForm15Registry();
+    }
   } catch(err) {
     console.error('Save form error:', err);
     alert('Error saving record. Please try again.');
@@ -15183,8 +15361,85 @@ async function saveFormRecord() {
 function _showFormFields(formType) {
   var f5  = document.getElementById('form5-fields');
   var f14 = document.getElementById('form14-fields');
+  var f15 = document.getElementById('form15-fields');
   if (f5)  f5.style.display  = formType === 'Form 5'  ? '' : 'none';
   if (f14) f14.style.display = formType === 'Form 14' ? '' : 'none';
+  if (f15) f15.style.display = formType === 'Form 15' ? '' : 'none';
+}
+
+function changeActiveFormType(formType) {
+  _activeFormType = formType || 'Form 5';
+  document.getElementById('form-modal-title').textContent = (_editingFormId ? '✏️ Edit ' : '+ Add ') + _activeFormType + ' Record';
+  _showFormFields(_activeFormType);
+}
+
+function readFileAsDataURL(file) {
+  return new Promise(function(resolve, reject) {
+    if (!file) { resolve(''); return; }
+    var reader = new FileReader();
+    reader.onload = function(e) { resolve(e.target.result); };
+    reader.onerror = function() { reject(new Error('File read error')); };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleFormPhotoUpload(input) {
+  var preview = document.getElementById('fm-photo-preview');
+  if (!input || !input.files || !input.files[0]) {
+    _formPhotoDataURL = '';
+    if (preview) preview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
+    return;
+  }
+  try {
+    _formPhotoDataURL = await readFileAsDataURL(input.files[0]);
+    if (preview) preview.innerHTML = '<img src="' + _formPhotoDataURL + '" style="max-width:100%;max-height:150px;border:1px solid #ccc;border-radius:4px;display:block;">';
+  } catch (err) {
+    console.error('Photo upload error:', err);
+    _formPhotoDataURL = '';
+    if (preview) preview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
+    alert('Could not read the uploaded photo. Please try a different file.');
+  }
+}
+
+function getStudentForFormLookup(value) {
+  if (!value) return null;
+  var key = String(value || '').trim().toLowerCase();
+  if (!key || !Array.isArray(data.students)) return null;
+  return data.students.find(function(s) {
+    var ids = [s.studentId, s.id, s.firebaseId].map(function(x){ return x ? String(x).trim().toLowerCase() : ''; });
+    return ids.includes(key);
+  }) || null;
+}
+
+function mapStudentVehicleClass(vehicle) {
+  if (!vehicle) return '';
+  var v = String(vehicle).trim().toLowerCase();
+  if (v.includes('lmv') || v.includes('4-wheeler') || v.includes('4 wheeler') || v.includes('four')) return 'LMV';
+  if (v.includes('mcwg') || v.includes('2-wheeler') || v.includes('2 wheeler') || v.includes('gear') || v.includes('motorcycle')) return 'MCWG';
+  if (v.includes('mcwog') || v.includes('gearless')) return 'MCWOG';
+  if (v.includes('hmv') || v.includes('heavy')) return 'HMV';
+  return '';
+}
+
+function populateFormFromStudentId(value) {
+  var student = getStudentForFormLookup(value);
+  if (!student) return;
+
+  var setVal = function(id, val) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.value = val || '';
+  };
+
+  if (student.name) setVal('fm-candidateName', student.name);
+  if (student.phone) setVal('fm-phone', student.phone);
+  if (student.address) setVal('fm-address', student.address);
+  if (student.dob) setVal('fm-dob', student.dob);
+  if (student.enrolled) setVal('fm-enrollDate', student.enrolled);
+
+  var vehicleClass = mapStudentVehicleClass(student.vehicle || '');
+  if (vehicleClass) setVal('fm-vehicleClass', vehicleClass);
+  if (student.vehicleNumber) setVal('fm-vehicleNumber', student.vehicleNumber);
 }
 
 </script>
@@ -15196,12 +15451,24 @@ function _showFormFields(formType) {
       <h3 id="form-modal-title">+ Add Form Record</h3>
       <button class="modal-close" onclick="closeModal('modal-add-form')">✕</button>
     </div>
+    <div id="form-school-info" style="font-size:13px;color:#444;margin:0 0 10px;"></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;align-items:flex-end;">
+      <div class="form-group" style="flex:1;min-width:220px;margin-bottom:0;">
+        <label>Form Type</label>
+        <select id="fm-formType" onchange="changeActiveFormType(this.value)">
+          <option value="Form 5">Form 5</option>
+          <option value="Form 14">Form 14</option>
+          <option value="Form 15">Form 15</option>
+        </select>
+      </div>
+      <div style="font-size:12px;color:#475569;flex:1;min-width:220px;">Choose the form type before entering details.</div>
+    </div>
 
     <!-- Common fields -->
     <div class="form-grid">
       <div class="form-group">
         <label>Serial No.</label>
-        <input type="text" id="fm-serialNo" placeholder="e.g. 001">
+        <input type="text" id="fm-serialNo" placeholder="e.g. 001" oninput="populateFormFromStudentId(this.value)">
       </div>
       <div class="form-group">
         <label>Candidate Name *</label>
@@ -15270,6 +15537,36 @@ function _showFormFields(formType) {
         <div class="form-group">
           <label>Completion Date</label>
           <input type="date" id="fm-endDate14">
+        </div>
+        <div class="form-group full">
+          <label>Upload Trainee Photo</label>
+          <input type="file" id="fm-photo" accept="image/*" onchange="handleFormPhotoUpload(this)">
+        </div>
+        <div class="form-group full">
+          <div id="fm-photo-preview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #cbd5e1;border-radius:8px;padding:12px;color:#6b7280;font-size:12px;">No photo selected</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Form 15 specific fields -->
+    <div id="form15-fields" style="display:none;">
+      <div style="font-size:12px;font-weight:600;color:#b45309;margin:14px 0 10px;">📒 Form 15 Details (Daily Training Log)</div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Training Start Date</label>
+          <input type="date" id="fm-form15-startDate">
+        </div>
+        <div class="form-group">
+          <label>Training End Date</label>
+          <input type="date" id="fm-form15-endDate">
+        </div>
+        <div class="form-group">
+          <label>Instructor Name</label>
+          <input type="text" id="fm-form15-instructor" placeholder="Instructor name">
+        </div>
+        <div class="form-group">
+          <label>RTO Office</label>
+          <input type="text" id="fm-form15-rtoOffice" placeholder="e.g. RTO Bengaluru">
         </div>
       </div>
     </div>
