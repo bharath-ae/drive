@@ -4932,7 +4932,16 @@ async function loadInitialData() {
       if (agents.status === 'fulfilled')       data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
       if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
-    } else if (currentRole === 'instructor') {
+    }
+
+    // Load any locally stored agents for this school so names persist across refresh
+    const localAgents = loadAgentsFromLocalStorage(sid);
+    if (localAgents.length > 0) {
+      data.agents = mergeSchoolData(data.agents, localAgents, sid);
+      updateAgentDatalist();
+    }
+
+    if (currentRole === 'instructor') {
       const [students, fuel] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getDocuments(FirebaseService.fuelRef)
@@ -11373,15 +11382,68 @@ function updateAgentDatalist() {
   });
 }
 
+function getAgentStorageKey(schoolId) {
+  return 'fg_local_agents:' + (schoolId || 'global');
+}
+
+function loadAgentsFromLocalStorage(schoolId) {
+  const loaded = [];
+  const seen = new Set();
+  const keys = [];
+  if (schoolId) keys.push(getAgentStorageKey(schoolId));
+  keys.push(getAgentStorageKey('global'));
+  keys.forEach(function(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const items = JSON.parse(raw);
+      if (!Array.isArray(items)) return;
+      items.forEach(function(agent) {
+        const name = ((agent && (agent.name || agent.agentName || '') ) || '').trim();
+        if (!name) return;
+        const normalized = name.toLowerCase();
+        if (seen.has(normalized)) return;
+        seen.add(normalized);
+        loaded.push({
+          name: name,
+          createdAt: (agent && agent.createdAt) || new Date().toISOString(),
+          schoolId: (agent && agent.schoolId) || schoolId || ''
+        });
+      });
+    } catch (e) {
+      // ignore malformed localStorage entries
+    }
+  });
+  return loaded;
+}
+
+function saveAgentsToLocalStorage(schoolId) {
+  try {
+    const stored = (data.agents || []).filter(function(agent) {
+      return !schoolId || schoolId === 'global' || ((agent && (agent.schoolId || '')) === schoolId);
+    }).map(function(agent) {
+      return {
+        name: (agent && agent.name) || '',
+        createdAt: (agent && agent.createdAt) || new Date().toISOString(),
+        schoolId: (agent && agent.schoolId) || schoolId || ''
+      };
+    });
+    localStorage.setItem(getAgentStorageKey(schoolId), JSON.stringify(stored));
+  } catch (e) {
+    console.warn('Could not save agents to local storage:', e.message || e);
+  }
+}
+
 function ensureAgentRegistered(agentName) {
   const name = (agentName || '').trim();
   if (!name) return;
   data.agents = data.agents || [];
   const already = data.agents.some(function(agent) {
-    return ((agent.name || agent.agentName || '') || '').trim().toLowerCase() === name.toLowerCase();
+    return ((agent && (agent.name || agent.agentName || '')) || '').trim().toLowerCase() === name.toLowerCase();
   });
   if (!already) {
-    data.agents.push({ name: name, createdAt: new Date().toISOString() });
+    data.agents.push({ name: name, createdAt: new Date().toISOString(), schoolId: currentSchoolId || '' });
+    saveAgentsToLocalStorage(currentSchoolId || 'global');
   }
   updateAgentDatalist();
 }
@@ -11880,7 +11942,7 @@ function openEditStudentModal(s) {
       <div class="form-grid">
         <div class="form-group"><label>Vehicle Type</label>
           <select id="edit-s-vehicle">
-            ${['2-Wheeler (Gear)','2-Wheeler (Gearless)','4-Wheeler (LMV)','Both 2W + 4W'].map(v=>`<option ${s.vehicle===v?'selected':''}>${v}</option>`).join('')}
+            ${['2-Wheeler (Gear)','2-Wheeler (Gearless)','4-Wheeler (LMV)','Both 2W + 4W','Heavy','LMV Badge','Trans Badge (PSV)','HMV','PSV','MCWG'].map(v=>`<option ${s.vehicle===v?'selected':''}>${v}</option>`).join('')}
           </select>
         </div>
         <div class="form-group"><label>Instructor</label>
@@ -12054,74 +12116,89 @@ function generateStudentInvoice(id) {
   }
 
   const invoiceHTML =
-    '<div style="background:#ffffff;padding:32px;border-radius:24px;box-shadow:0 32px 80px rgba(15,23,42,.12);max-width:900px;margin:0 auto;" id="invoice-content">' +
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:28px;flex-wrap:wrap;">' +
-        '<div style="min-width:220px;">' +
-          '<div style="font-family:\'Syne\';font-size:28px;font-weight:800;color:#0f172a;">' + schoolName + '</div>' +
-          '<div style="margin-top:10px;font-size:13px;color:#475569;line-height:1.8;">Premium driving school services for learners, renewals, and RTO support.</div>' +
-        '</div>' +
-        '<div style="text-align:right;min-width:220px;">' +
-          '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#64748b;margin-bottom:8px;font-weight:700;">Invoice</div>' +
-          '<div style="font-family:\'Syne\';font-size:24px;font-weight:800;color:#2563eb;margin-bottom:6px;">' + invoiceNo + '</div>' +
-          '<div style="font-size:13px;color:#64748b;">' + today + '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:28px;">' +
-        '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:22px;">' +
-          '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#64748b;margin-bottom:10px;font-weight:700;">Bill To</div>' +
-          '<div style="font-size:16px;font-weight:700;color:#0f172a;">' + s.name + '</div>' +
-          '<div style="margin-top:12px;font-size:13px;color:#475569;line-height:1.8;">' + (s.address||'—') + '</div>' +
-          '<div style="margin-top:12px;font-size:13px;color:#0f172a;">📞 ' + s.phone + '</div>' +
-          emailRow +
-        '</div>' +
-        '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:18px;padding:22px;">' +
-          '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#64748b;margin-bottom:10px;font-weight:700;">Enrollment Summary</div>' +
-          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;color:#475569;line-height:1.8;">' +
-            '<div><strong style="color:#0f172a;">Vehicle</strong><br>' + (s.vehicle||'—') + '</div>' +
-            '<div><strong style="color:#0f172a;">Instructor</strong><br>' + (s.instructor||'—') + '</div>' +
-            '<div><strong style="color:#0f172a;">Enrolled</strong><br>' + (s.enrolled||'—') + '</div>' +
-            '<div><strong style="color:#0f172a;">Classes</strong><br>' + (s.classes||0) + ' / ' + (s.totalClasses||27) + '</div>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div style="overflow-x:auto;margin-bottom:24px;">' +
-        '<table style="width:100%;border-collapse:collapse;">' +
-          '<thead>' +
-            '<tr style="background:#eff6ff;color:#0f172a;text-align:left;">' +
-              '<th style="padding:14px 16px;font-size:12px;text-transform:uppercase;letter-spacing:.12em;">Description</th>' +
-              '<th style="padding:14px 16px;font-size:12px;text-align:right;text-transform:uppercase;letter-spacing:.12em;">Amount</th>' +
-            '</tr>' +
-          '</thead>' +
-          '<tbody>' +
-            '<tr style="border-bottom:1px solid #e2e8f0;">' +
-              '<td style="padding:14px 16px;font-size:14px;color:#334155;">Driving Course Fee</td>' +
-              '<td style="padding:14px 16px;font-size:14px;text-align:right;font-weight:700;color:#0f172a;">₹' + totalFee.toLocaleString() + '</td>' +
-            '</tr>' +
-          '</tbody>' +
-          '<tfoot>' +
-            '<tr>' +
-              '<td style="padding:14px 16px;font-size:13px;color:#64748b;">Total Paid</td>' +
-              '<td style="padding:14px 16px;text-align:right;font-size:14px;font-weight:700;color:#16a34a;">₹' + paid.toLocaleString() + '</td>' +
-            '</tr>' +
-            '<tr>' +
-              '<td style="padding:14px 16px;font-size:13px;font-weight:700;color:' + (balance>0 ? '#dc2626' : '#16a34a') + ';">' + balLabel + '</td>' +
-              '<td style="padding:14px 16px;text-align:right;font-size:16px;font-weight:800;color:' + (balance>0 ? '#dc2626' : '#16a34a') + ';">₹' + Math.abs(balance).toLocaleString() + '</td>' +
-            '</tr>' +
-          '</tfoot>' +
-        '</table>' +
-      '</div>' +
-      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:24px;padding-top:18px;border-top:1px solid #e2e8f0;">' +
-        '<div style="min-height:90px;padding:18px;border:1px dashed #cbd5e1;border-radius:14px;">' +
-          '<div style="font-size:12px;font-weight:700;color:#0f172a;margin-bottom:10px;">Authorized Signature</div>' +
-          '<div style="height:40px;border-bottom:1px solid #cbd5e1;margin-bottom:6px;"></div>' +
-          '<div style="font-size:12px;color:#64748b;">Signatory name and stamp</div>' +
-        '</div>' +
-        '<div style="display:flex;flex-direction:column;justify-content:flex-end;gap:8px;font-size:13px;color:#475569;text-align:right;">' +
-          '<div>Invoice generated by ' + schoolName + '.</div>' +
-          '<div>Generated on ' + today + '</div>' +
-        '</div>' +
-      '</div>' +
-    '</div>';  const modalHTML =
+    '<div style="max-width:900px;margin:0 auto;padding:24px;background:#f8fafc;" id="invoice-content">' +
+      '<table style="width:100%;border-collapse:collapse;background:#ffffff;border:1px solid #e2e8f0;border-radius:24px;overflow:hidden;box-shadow:0 24px 60px rgba(15,23,42,.08);">' +
+        '<thead>' +
+          '<tr>' +
+            '<th colspan="2" style="padding:28px 32px;text-align:left;background:#2563eb;color:#ffffff;">' +
+              '<div style="font-size:22px;font-weight:800;">' + schoolName + '</div>' +
+              '<div style="margin-top:8px;font-size:13px;opacity:.85;">Premium driving school services for learners, renewals, and RTO support.</div>' +
+            '</th>' +
+            '<th style="padding:28px 32px;text-align:right;background:#111827;color:#ffffff;">' +
+              '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;opacity:.8;">Invoice</div>' +
+              '<div style="font-size:26px;font-weight:800;margin:10px 0;">' + invoiceNo + '</div>' +
+              '<div style="font-size:13px;opacity:.85;">' + today + '</div>' +
+            '</th>' +
+          '</tr>' +
+        '</thead>' +
+        '<tbody>' +
+          '<tr>' +
+            '<td colspan="2" style="padding:28px 32px;border-bottom:1px solid #e2e8f0;vertical-align:top;">' +
+              '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#64748b;margin-bottom:10px;font-weight:700;">Bill To</div>' +
+              '<div style="font-size:16px;font-weight:700;color:#0f172a;">' + s.name + '</div>' +
+              '<div style="margin-top:10px;font-size:13px;color:#475569;line-height:1.8;">' + (s.address||'—') + '</div>' +
+              '<div style="margin-top:12px;font-size:13px;color:#0f172a;">📞 ' + s.phone + '</div>' +
+              emailRow +
+            '</td>' +
+            '<td style="padding:28px 32px;border-bottom:1px solid #e2e8f0;vertical-align:top;">' +
+              '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#64748b;margin-bottom:10px;font-weight:700;">Enrollment Summary</div>' +
+              '<table style="width:100%;border-collapse:collapse;font-size:13px;color:#475569;">' +
+                '<tr><td style="padding:6px 0;color:#0f172a;font-weight:600;">Vehicle</td><td style="padding:6px 0;text-align:right;">' + (s.vehicle||'—') + '</td></tr>' +
+                '<tr><td style="padding:6px 0;color:#0f172a;font-weight:600;">Instructor</td><td style="padding:6px 0;text-align:right;">' + (s.instructor||'—') + '</td></tr>' +
+                '<tr><td style="padding:6px 0;color:#0f172a;font-weight:600;">Enrolled</td><td style="padding:6px 0;text-align:right;">' + (s.enrolled||'—') + '</td></tr>' +
+                '<tr><td style="padding:6px 0;color:#0f172a;font-weight:600;">Classes</td><td style="padding:6px 0;text-align:right;">' + (s.classes||0) + ' / ' + (s.totalClasses||27) + '</td></tr>' +
+              '</table>' +
+            '</td>' +
+          '</tr>' +
+          '<tr>' +
+            '<td colspan="3" style="padding:0 32px 32px;">' +
+              '<div style="overflow-x:auto;">' +
+                '<table style="width:100%;border-collapse:collapse;">' +
+                  '<thead>' +
+                    '<tr style="background:#eff6ff;color:#0f172a;text-align:left;">' +
+                      '<th style="padding:14px 16px;font-size:12px;text-transform:uppercase;letter-spacing:.12em;">Description</th>' +
+                      '<th style="padding:14px 16px;font-size:12px;text-align:right;text-transform:uppercase;letter-spacing:.12em;">Amount</th>' +
+                    '</tr>' +
+                  '</thead>' +
+                  '<tbody>' +
+                    '<tr style="border-bottom:1px solid #e2e8f0;">' +
+                      '<td style="padding:14px 16px;font-size:14px;color:#334155;">Driving Course Fee</td>' +
+                      '<td style="padding:14px 16px;font-size:14px;text-align:right;font-weight:700;color:#0f172a;">₹' + totalFee.toLocaleString() + '</td>' +
+                    '</tr>' +
+                  '</tbody>' +
+                  '<tfoot>' +
+                    '<tr>' +
+                      '<td style="padding:14px 16px;font-size:13px;color:#64748b;">Total Paid</td>' +
+                      '<td style="padding:14px 16px;text-align:right;font-size:14px;font-weight:700;color:#16a34a;">₹' + paid.toLocaleString() + '</td>' +
+                    '</tr>' +
+                    '<tr>' +
+                      '<td style="padding:14px 16px;font-size:13px;font-weight:700;color:' + (balance>0 ? '#dc2626' : '#16a34a') + ';">' + balLabel + '</td>' +
+                      '<td style="padding:14px 16px;text-align:right;font-size:16px;font-weight:800;color:' + (balance>0 ? '#dc2626' : '#16a34a') + ';">₹' + Math.abs(balance).toLocaleString() + '</td>' +
+                    '</tr>' +
+                  '</tfoot>' +
+                '</table>' +
+              '</div>' +
+            '</td>' +
+          '</tr>' +
+          '<tr>' +
+            '<td colspan="2" style="padding:24px 32px;vertical-align:top;">' +
+              '<div style="font-size:13px;color:#475569;line-height:1.8;">' +
+                '<div style="font-weight:700;color:#0f172a;margin-bottom:10px;">Notes</div>' +
+                '<div>Payment is due immediately. Please contact us if you need support with installments or documentation.</div>' +
+              '</div>' +
+            '</td>' +
+            '<td style="padding:24px 32px;vertical-align:top;">' +
+              '<div style="padding:18px;border:1px dashed #cbd5e1;border-radius:14px;">' +
+                '<div style="font-size:12px;font-weight:700;color:#0f172a;margin-bottom:10px;">Authorized Signature</div>' +
+                '<div style="height:40px;border-bottom:1px solid #cbd5e1;margin-bottom:10px;"></div>' +
+                '<div style="font-size:12px;color:#64748b;">Signatory name and stamp</div>' +
+              '</div>' +
+            '</td>' +
+          '</tr>' +
+        '</tbody>' +
+      '</table>' +
+    '</div>';
+  const modalHTML =
     '<div class="modal" style="width:700px;max-width:96vw;max-height:90vh;overflow-y:auto;">' +
       '<div class="modal-header">' +
         '<h3>\ud83e\uddfe Fee Invoice</h3>' +
@@ -12315,6 +12392,7 @@ async function saveAgent() {
       console.warn('Could not persist agent to Firestore:', err.message || err);
     }
   }
+  saveAgentsToLocalStorage(currentSchoolId || 'global');
   const modal = document.getElementById('modal-add-agent');
   if (modal) modal.remove();
   renderAgentsPage();
