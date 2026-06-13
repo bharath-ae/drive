@@ -926,6 +926,13 @@
             <div class="form-group"><label>Assign Instructor</label>
               <select id="s-instructor"><option value="">Select Instructor</option></select>
             </div>
+            <div class="form-group"><label>Assign Agent (optional)</label>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input list="agent-list" id="s-agent" placeholder="Search or type agent name" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13.5px;">
+                <button class="btn btn-outline btn-sm" type="button" onclick="focusAgentInput('s-agent')">Search</button>
+              </div>
+              <datalist id="agent-list"></datalist>
+            </div>
             <div class="form-group"><label>Total Classes</label><input type="number" id="s-total-classes" placeholder="e.g. 27" value="27" min="1"></div>
             <div class="form-group"><label>Fee Amount (₹)</label><input type="number" id="s-fee" placeholder="Total fee"></div>
             <div class="form-group"><label>Fee Paid (₹)</label><input type="number" id="s-paid" placeholder="Amount paid"></div>
@@ -1668,6 +1675,20 @@
         <!-- Populated by renderOtherServices() -->
       </div>
 
+      <!-- AGENTS PAGE -->
+      <div class="page" id="page-agents">
+        <div class="page-header">
+          <div><h2>Agents</h2><p>Agent referrals and assigned students</p></div>
+          <button class="btn btn-accent" onclick="openAddAgentModal()">+ Add Agent</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <input id="agents-search-input" type="text" placeholder="🔍 Search agents by name..." style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" oninput="renderAgentsPage(this.value)">
+          </div>
+          <div id="agents-list"></div>
+        </div>
+      </div>
+
       <!-- FORMS REGISTRY PAGE -->
       <div class="page" id="page-forms-registry">
         <!-- Populated by renderFormsRegistry('Form 5') -->
@@ -1767,6 +1788,13 @@
         </div>
         <div class="form-group"><label>Assign Instructor (optional)</label>
           <select id="qs-instructor"><option value="">-- Select Instructor --</option></select>
+        </div>
+        <div class="form-group"><label>Assign Agent (optional)</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input list="qs-agent-list" id="qs-agent" placeholder="Search or type agent name" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13.5px;">
+            <button class="btn btn-outline btn-sm" type="button" onclick="focusAgentInput('qs-agent')">Search</button>
+          </div>
+          <datalist id="qs-agent-list"></datalist>
         </div>
         <div class="form-group"><label>Class Time (optional)</label>
           <input type="time" id="qs-class-time" placeholder="e.g. 10:30">
@@ -2279,12 +2307,51 @@
           <option value="intern">Intern</option>
         </select>
       </div>
+      <div class="form-group full"><label>Permissions</label>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">
+            <input type="checkbox" id="staff-perm-students" style="margin:0;">
+            <div>
+              <div style="font-weight:600;color:#374151;font-size:13px;">👥 Students</div>
+              <div style="font-size:11px;color:#6b7280;">Access student records</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">
+            <input type="checkbox" id="staff-perm-transactions" style="margin:0;">
+            <div>
+              <div style="font-weight:600;color:#374151;font-size:13px;">💰 Transactions</div>
+              <div style="font-size:11px;color:#6b7280;">Manage payments & expenses</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">
+            <input type="checkbox" id="staff-perm-attendance" style="margin:0;">
+            <div>
+              <div style="font-weight:600;color:#374151;font-size:13px;">✅ Attendance</div>
+              <div style="font-size:11px;color:#6b7280;">Mark attendance</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">
+            <input type="checkbox" id="staff-perm-reports" style="margin:0;">
+            <div>
+              <div style="font-weight:600;color:#374151;font-size:13px;">📊 Reports</div>
+              <div style="font-size:11px;color:#6b7280;">View reports</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">
+            <input type="checkbox" id="staff-perm-dashboard" style="margin:0;">
+            <div>
+              <div style="font-weight:600;color:#374151;font-size:13px;">📋 Dashboard Overview</div>
+              <div style="font-size:11px;color:#6b7280;">See dashboard summaries</div>
+            </div>
+          </label>
+        </div>
+      </div>
       <div class="form-group full"><label>Notes</label>
         <textarea id="staff-notes" placeholder="Additional notes about staff member" rows="2" style="width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-family: 'DM Sans'; font-size: 14px; resize: vertical;"></textarea>
       </div>
     </div>
     <div style="margin-top:20px;display:flex;gap:10px;">
-      <button class="btn btn-accent" data-action="add_staff" onclick="addStaffFromModal()">Add Staff</button>
+      <button id="staff-modal-submit" class="btn btn-accent" data-action="add_staff" onclick="addStaffFromModal()">Add Staff</button>
       <button class="btn btn-outline" onclick="closeModal('modal-add-staff')">Cancel</button>
     </div>
   </div>
@@ -2304,13 +2371,15 @@
           'page-attendance': 'nav-attendance',
           'page-class-schedule': 'nav-class-schedule',
           'page-student-attendance': 'nav-student-attendance',
-          'page-petrol': 'nav-petrol'
+          'page-petrol': 'nav-petrol',
+          'page-agents': 'nav-agents'
         };
         const navEl = document.getElementById(navMap[id]);
         if (navEl) navEl.classList.add('active');
         // Auto-render student attendance page with instructor's students
         if (id === 'page-student-attendance') initStudentAttendancePage();
         if (id === 'page-attendance') renderSelfAttHistory();
+        if (id === 'page-agents') renderAgentsPage();
       }
 
       function getCurrentInstructorName() {
@@ -4807,6 +4876,7 @@ let data = {
   vehicles: [],
   notifications: [],
   otherServices: [],
+  agents: [],
   studentAttendanceRecords: []
 };
 
@@ -4827,12 +4897,13 @@ async function loadInitialData() {
     // Load data based on user role
     if (currentRole === 'owner') {
       // Owner loads all data — scoped to the currently selected school
-      const [students, transactions, dlTests, fuel, notifications, otherSvcs, forms] = await Promise.allSettled([
+      const [students, transactions, dlTests, fuel, notifications, otherSvcs, agents, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getTransactions(),
         FirebaseService.getDocuments(FirebaseService.dlTestsRef,        'createdAt','desc','dlTests',       FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(FirebaseService.fuelRef,            'createdAt','desc','fuel',          FGCache.TTL_SHORT),
         FirebaseService.getDocuments(FirebaseService.notificationsRef,   'createdAt','desc','notifications', FGCache.TTL_SHORT),
+        FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('agents'),'createdAt','desc','agents',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid),'createdAt','desc','otherServices',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid),        'createdAt','desc','forms',       FGCache.TTL_MEDIUM)
       ]);
@@ -4841,14 +4912,16 @@ async function loadInitialData() {
       if (dlTests.status === 'fulfilled')       data.dlTests       = mergeSchoolData(data.dlTests,       dlTests.value,       sid);
       if (fuel.status === 'fulfilled')          data.fuel          = mergeSchoolData(data.fuel,          fuel.value,          sid);
       if (notifications.status === 'fulfilled') data.notifications = mergeSchoolData(data.notifications, notifications.value, sid);
+      if (agents.status === 'fulfilled')       data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
       if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
     } else if (currentRole === 'office') {
-      const [students, transactions, dlTests, notifications, otherSvcs, forms] = await Promise.allSettled([
+      const [students, transactions, dlTests, notifications, agents, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
         FirebaseService.getTransactions(),
         FirebaseService.getDocuments(FirebaseService.dlTestsRef,        'createdAt','desc','dlTests',       FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(FirebaseService.notificationsRef,   'createdAt','desc','notifications', FGCache.TTL_SHORT),
+        FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('agents'),'createdAt','desc','agents',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid),'createdAt','desc','otherServices',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid),        'createdAt','desc','forms',       FGCache.TTL_MEDIUM)
       ]);
@@ -4856,6 +4929,7 @@ async function loadInitialData() {
       if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
       if (dlTests.status === 'fulfilled')       data.dlTests       = mergeSchoolData(data.dlTests,       dlTests.value,       sid);
       if (notifications.status === 'fulfilled') data.notifications = mergeSchoolData(data.notifications, notifications.value, sid);
+      if (agents.status === 'fulfilled')       data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
       if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
     } else if (currentRole === 'instructor') {
@@ -5056,6 +5130,7 @@ const navConfig = {
       {id:'forms-registry',icon:'&#128203;',label:'Form 5 Registry'},
       {id:'form14-registry',icon:'&#128202;',label:'Form 14 Registry'},
       {id:'form15-registry',icon:'&#128210;',label:'Form 15 (Training Log)'},
+      {id:'agents',icon:'&#128101;',label:'Agents'},
       {id:'student-tracking',icon:'&#128205;',label:'Student Tracking'},
       {id:'dl-tests',icon:'&#128990;',label:'DL Tests'},
       {id:'notifications',icon:'&#128226;',label:'Notifications'},
@@ -5276,7 +5351,7 @@ function hasPageAccess(pageId) {
       'admin-management', 'staff-management',
       'owner-fuel', 'vehicles', 'owner-attendance',
       'other-services', 'student-tracking', 'dl-tests', 'notifications', 'add-student',
-      'forms-registry', 'form14-registry', 'form15-registry', 'form5-print', 'form14-print',
+      'forms-registry', 'form14-registry', 'form15-registry', 'agents', 'form5-print', 'form14-print',
       'data-import'
     ],
     office: [
@@ -7537,7 +7612,7 @@ function openAddStudentModal() {
   // ── Clear ALL form fields first ──────────────────────────────
   const textFields = [
     'qs-name','qs-phone','qs-dob','qs-email','qs-address','qs-aadhaar',
-    'qs-emergency','qs-class-time','qs-form15-start','qs-form15-end','qs-notes','qs-fee','qs-paid',
+    'qs-emergency','qs-agent','qs-class-time','qs-form15-start','qs-form15-end','qs-notes','qs-fee','qs-paid',
     'qs-schedule-start','qs-form-no'
   ];
   textFields.forEach(function(id) {
@@ -7603,6 +7678,7 @@ function openAddStudentModal() {
     }
   };
   populateInstructorDropdown('qs-instructor');
+  updateAgentDatalist();
   openModal('modal-add-student');
 }
 
@@ -7616,6 +7692,7 @@ async function addStudentFromModal() {
   if(!name||!phone){alert('Name and phone required');return;}
   const amountPaid = parseInt(document.getElementById('qs-paid').value)||0;
   const paymentMode = document.getElementById('qs-paymode').value;
+  const agentName = document.getElementById('qs-agent') ? document.getElementById('qs-agent').value.trim() : '';
   const studentId = document.getElementById('qs-student-id').value.trim();
   const totalClasses = parseInt(document.getElementById('qs-total-classes') && document.getElementById('qs-total-classes').value) || 27;
   try {
@@ -7625,6 +7702,8 @@ async function addStudentFromModal() {
     const studentData = {
       name, phone,
       vehicle: document.getElementById('qs-vehicle').value,
+      agentName: agentName,
+      agent: agentName,
       instructor: qsInstName || qsInstValue,
       instructorEmail: qsInstValue || '',
       instructorName: qsInstName || '',
@@ -7647,6 +7726,7 @@ async function addStudentFromModal() {
       schoolId: currentSchoolId,
       ...FirebaseService.getOwnerScope()
     };
+    if (agentName) ensureAgentRegistered(agentName);
     
     await FirebaseService.addStudent(studentData);
     
@@ -7678,6 +7758,11 @@ async function addStudentFromModal() {
     }
     
     // Add cash flow entry if amount was paid
+    if (!data.students) data.students = [];
+    data.students.push(studentData);
+    updateAgentDatalist();
+    if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage();
+
     if (amountPaid > 0) {
       const transactionData = {
         date: new Date().toISOString().split('T')[0],
@@ -7713,11 +7798,14 @@ async function enrollStudent() {
   
   try {
     const paidAmt = parseInt(document.getElementById('s-paid').value)||0;
+    const agentName = document.getElementById('s-agent') ? document.getElementById('s-agent').value.trim() : '';
     const sInstEl = document.getElementById('s-instructor');
     const sInstValue = sInstEl ? sInstEl.value : '';
     const sInstName = sInstEl ? (sInstEl.options[sInstEl.selectedIndex] ? sInstEl.options[sInstEl.selectedIndex].text : sInstValue) : '';
     const studentData = {
       name, phone,
+      agentName: agentName,
+      agent: agentName,
       email: document.getElementById('s-email').value,
       vehicle: document.getElementById('s-vehicle').value,
       instructor: sInstName || sInstValue,
@@ -7737,8 +7825,17 @@ async function enrollStudent() {
       schoolId: currentSchoolId,
       ...FirebaseService.getOwnerScope()
     };
+    if (agentName) ensureAgentRegistered(agentName);
     
-    await FirebaseService.addStudent(studentData);
+    const studentRef = await FirebaseService.addStudent(studentData);
+    if (studentRef && studentRef.id) {
+      studentData.id = studentRef.id;
+      studentData.firebaseId = studentRef.id;
+    }
+    if (!data.students) data.students = [];
+    data.students.push(studentData);
+    updateAgentDatalist();
+    if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage();
     if (studentData.fcmToken && studentData.email) {
       await saveUserFcmToken(studentData.email, studentData.fcmToken);
     }
@@ -7752,7 +7849,7 @@ async function enrollStudent() {
 }
 
 function clearEnrollForm() {
-  ['s-name','s-dob','s-phone','s-email','s-fcm-token','s-address','s-aadhaar','s-fee','s-paid','s-enroll','s-emergency'].forEach(id => {
+  ['s-name','s-dob','s-phone','s-email','s-fcm-token','s-address','s-aadhaar','s-fee','s-paid','s-enroll','s-emergency','s-agent'].forEach(id => {
     const el = document.getElementById(id); if(el) el.value='';
   });
 }
@@ -7872,6 +7969,15 @@ function openStudentDetailModal(s) {
       </div>
     </div>
 
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px;">
+      <button class="btn btn-primary btn-sm student-detail-tab-btn" data-tab="normal" onclick="switchStudentDetailTab('normal')">Normal</button>
+      <button class="btn btn-outline btn-sm student-detail-tab-btn" data-tab="ll" onclick="switchStudentDetailTab('ll')">LL Info</button>
+      <button class="btn btn-outline btn-sm student-detail-tab-btn" data-tab="dl" onclick="switchStudentDetailTab('dl')">DL Info</button>
+      <button class="btn btn-outline btn-sm student-detail-tab-btn" data-tab="application" onclick="switchStudentDetailTab('application')">Application Info</button>
+    </div>
+
+    <div id="student-detail-tab-area" style="margin-bottom:18px;"></div>
+
     <!-- Notification / FCM Token -->
     <div style="background:var(--surface2);border-radius:10px;padding:14px 16px;margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
@@ -7927,8 +8033,160 @@ function openStudentDetailModal(s) {
 
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
   document.body.appendChild(modal);
+  window.__studentDetailModalData = s;
+  switchStudentDetailTab('normal');
   // Load attendance stats for this student
   loadStudentAttendanceStats(s.firebaseId || s.id);
+}
+
+function switchStudentDetailTab(tab) {
+  const s = window.__studentDetailModalData || {};
+  const buttons = document.querySelectorAll('.student-detail-tab-btn');
+  buttons.forEach(btn => {
+    btn.classList.toggle('btn-primary', btn.dataset.tab === tab);
+    btn.classList.toggle('btn-outline', btn.dataset.tab !== tab);
+  });
+  const area = document.getElementById('student-detail-tab-area');
+  if (!area) return;
+  area.innerHTML = getStudentDetailSectionContent(s, tab);
+}
+
+function getStudentDetailSectionContent(s, tab) {
+  const studentId = s.firebaseId || s.id || 'unknown';
+  const llNumber = s.llNumber || '';
+  const llValidity = s.llValidity || '';
+  const dlNumber = s.dlNumber || '';
+  const dlValidFrom = s.dlValidFrom || '';
+  const dlValidUpto = s.dlValidUpto || '';
+  const llAppNumber = s.llAppNumber || '';
+  const llAppDob = s.llAppDob || '';
+  const dlAppNumber = s.dlAppNumber || '';
+  const dlAppDob = s.dlAppDob || '';
+
+  if (tab === 'll') {
+    return `
+      <div style="background:var(--surface2);border-radius:10px;padding:16px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📝 Learner Licence (LL) Information</div>
+        <div class="form-grid">
+          <div class="form-group"><label>LL Number</label><input type="text" id="ll-number-${studentId}" value="${llNumber}" placeholder="LL number"></div>
+          <div class="form-group"><label>LL Valid Until</label><input type="date" id="ll-validity-${studentId}" value="${llValidity}"></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
+          <button class="btn btn-accent" onclick="saveStudentCredentialDetails('${studentId}')">Save LL Info</button>
+          <span id="student-detail-save-msg" style="font-size:13px;color:var(--success);"></span>
+        </div>
+      </div>`;
+  }
+
+  if (tab === 'dl') {
+    return `
+      <div style="background:var(--surface2);border-radius:10px;padding:16px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📝 Driving Licence (DL) Information</div>
+        <div class="form-grid">
+          <div class="form-group"><label>DL Number</label><input type="text" id="dl-number-${studentId}" value="${dlNumber}" placeholder="DL number"></div>
+          <div class="form-group"><label>Valid From</label><input type="date" id="dl-valid-from-${studentId}" value="${dlValidFrom}"></div>
+          <div class="form-group"><label>Valid Up To</label><input type="date" id="dl-valid-to-${studentId}" value="${dlValidUpto}"></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
+          <button class="btn btn-accent" onclick="saveStudentCredentialDetails('${studentId}')">Save DL Info</button>
+          <span id="student-detail-save-msg" style="font-size:13px;color:var(--success);"></span>
+        </div>
+      </div>`;
+  }
+
+  if (tab === 'application') {
+    return `
+      <div style="background:var(--surface2);border-radius:10px;padding:16px;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📝 Application Information</div>
+        <div class="form-grid">
+          <div class="form-group"><label>LL Application Number</label><input type="text" id="ll-app-number-${studentId}" value="${llAppNumber}" placeholder="LL application number"></div>
+          <div class="form-group"><label>LL Applicant DOB</label><input type="date" id="ll-app-dob-${studentId}" value="${llAppDob}"></div>
+          <div class="form-group"><label>DL Application Number</label><input type="text" id="dl-app-number-${studentId}" value="${dlAppNumber}" placeholder="DL application number"></div>
+          <div class="form-group"><label>DL Applicant DOB</label><input type="date" id="dl-app-dob-${studentId}" value="${dlAppDob}"></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
+          <button class="btn btn-accent" onclick="saveStudentCredentialDetails('${studentId}')">Save Application Info</button>
+          <span id="student-detail-save-msg" style="font-size:13px;color:var(--success);"></span>
+        </div>
+      </div>`;
+  }
+
+  const llSummary = llNumber || llValidity ? `
+      <div style="background:#f8fafc;border-radius:10px;padding:14px;margin-bottom:12px;">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">LL Summary</div>
+        <div style="font-size:13px;line-height:1.8;">
+          <strong>LL Number:</strong> ${llNumber || '—'}<br>
+          <strong>Valid Until:</strong> ${llValidity || '—'}
+        </div>
+      </div>` : '';
+
+  const dlSummary = dlNumber || dlValidFrom || dlValidUpto ? `
+      <div style="background:#f8fafc;border-radius:10px;padding:14px;margin-bottom:12px;">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">DL Summary</div>
+        <div style="font-size:13px;line-height:1.8;">
+          <strong>DL Number:</strong> ${dlNumber || '—'}<br>
+          <strong>Valid From:</strong> ${dlValidFrom || '—'}<br>
+          <strong>Valid Up To:</strong> ${dlValidUpto || '—'}
+        </div>
+      </div>` : '';
+
+  const appSummary = llAppNumber || llAppDob || dlAppNumber || dlAppDob ? `
+      <div style="background:#f8fafc;border-radius:10px;padding:14px;">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Application Summary</div>
+        <div style="font-size:13px;line-height:1.8;">
+          <strong>LL App:</strong> ${llAppNumber || '—'} ${llAppDob ? '(DOB: '+llAppDob+')' : ''}<br>
+          <strong>DL App:</strong> ${dlAppNumber || '—'} ${dlAppDob ? '(DOB: '+dlAppDob+')' : ''}
+        </div>
+      </div>` : '';
+
+  return `
+    <div style="display:grid;grid-template-columns:1fr;gap:14px;">
+      ${llSummary}
+      ${dlSummary}
+      ${appSummary}
+      <div style="background:var(--surface2);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px;">
+        <div style="font-size:13px;font-weight:600;">ℹ️ Notes</div>
+        <div style="font-size:13px;line-height:1.8;color:var(--text2);">
+          Use the LL, DL and Application tabs to save licence data. This information will be available when you create Form 14 records.
+        </div>
+        <button class="btn btn-primary btn-sm" style="align-self:flex-start;" onclick="openAddFormModal('Form 14', '${String(studentId).replace(/'/g, "\\'")}')">Create Form 14 from this student</button>
+      </div>
+    </div>`;
+}
+
+async function saveStudentCredentialDetails(studentId) {
+  const id = String(studentId || (window.__studentDetailModalData && (window.__studentDetailModalData.firebaseId || window.__studentDetailModalData.id)) || '');
+  const fields = {
+    llNumber: `ll-number-${id}`,
+    llValidity: `ll-validity-${id}`,
+    dlNumber: `dl-number-${id}`,
+    dlValidFrom: `dl-valid-from-${id}`,
+    dlValidUpto: `dl-valid-to-${id}`,
+    llAppNumber: `ll-app-number-${id}`,
+    llAppDob: `ll-app-dob-${id}`,
+    dlAppNumber: `dl-app-number-${id}`,
+    dlAppDob: `dl-app-dob-${id}`
+  };
+  const updates = {};
+  Object.keys(fields).forEach(key => {
+    const el = document.getElementById(fields[key]);
+    if (el) updates[key] = el.value.trim();
+  });
+
+  const student = data.students.find(x => String(x.firebaseId)===id || String(x.id)===id);
+  if (student) Object.assign(student, updates);
+  if (window.__studentDetailModalData) Object.assign(window.__studentDetailModalData, updates);
+
+  if (currentSchoolId && typeof db !== 'undefined') {
+    try {
+      await db.collection('schools').doc(currentSchoolId).collection('students').doc(id).update(updates);
+    } catch (e) {
+      console.warn('Could not save licence info to DB:', e.message);
+    }
+  }
+  const msg = document.getElementById('student-detail-save-msg');
+  if (msg) { msg.textContent = 'Saved successfully'; setTimeout(() => { if (msg) msg.textContent=''; }, 3000); }
+  switchStudentDetailTab('normal');
 }
 
 async function saveStudentFcmToken(studentId) {
@@ -11083,6 +11341,59 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
 });
 
+function escapeHtml(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function getUniqueAgentNames() {
+  const names = new Set();
+  (data.agents || []).forEach(function(agent) {
+    const name = (agent && (agent.name || agent.agentName || agent.label || agent.toString()) || '').trim();
+    if (name) names.add(name);
+  });
+  (data.students || []).forEach(function(student) {
+    const name = ((student.agentName || student.agent) || '').trim();
+    if (name) names.add(name);
+  });
+  (data.otherServices || []).forEach(function(svc) {
+    const name = ((svc.agentName || svc.agent) || '').trim();
+    if (name) names.add(name);
+  });
+  return Array.from(names).sort(function(a,b){ return a.localeCompare(b); });
+}
+
+function updateAgentDatalist() {
+  const names = getUniqueAgentNames();
+  ['agent-list','qs-agent-list','os-agent-list'].forEach(function(id) {
+    const list = document.getElementById(id);
+    if (!list) return;
+    list.innerHTML = names.map(function(name) {
+      return '<option value="' + escapeHtml(name) + '">';
+    }).join('');
+  });
+}
+
+function ensureAgentRegistered(agentName) {
+  const name = (agentName || '').trim();
+  if (!name) return;
+  data.agents = data.agents || [];
+  const already = data.agents.some(function(agent) {
+    return ((agent.name || agent.agentName || '') || '').trim().toLowerCase() === name.toLowerCase();
+  });
+  if (!already) {
+    data.agents.push({ name: name, createdAt: new Date().toISOString() });
+  }
+  updateAgentDatalist();
+}
+
+function focusAgentInput(id) {
+  const input = document.getElementById(id);
+  if (input) {
+    input.focus();
+    if(input.select) input.select();
+  }
+}
+
 // ============================================================
 // INIT
 // ============================================================
@@ -11963,6 +12274,91 @@ function renderOtherServices() {
     '</div>';
 }
 
+function openAddAgentModal() {
+  const old = document.getElementById('modal-add-agent');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-add-agent';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML = `
+    <div class="modal" style="width:520px;max-width:96vw;">
+      <div class="modal-header">
+        <h3>➕ Add Agent</h3>
+        <button class="modal-close" onclick="document.getElementById('modal-add-agent').remove()">✕</button>
+      </div>
+      <div class="form-grid" style="padding:0 20px;">
+        <div class="form-group full"><label>Agent Name *</label><input type="text" id="agent-name" placeholder="Type agent name"></div>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn btn-accent" onclick="saveAgent()">Save Agent</button>
+        <button class="btn btn-outline" onclick="document.getElementById('modal-add-agent').remove()">Cancel</button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+  updateAgentDatalist();
+  const input = document.getElementById('agent-name'); if (input) input.focus();
+}
+
+async function saveAgent() {
+  const name = document.getElementById('agent-name')?.value.trim();
+  if (!name) { alert('Please enter the agent name.'); return; }
+  ensureAgentRegistered(name);
+  if (currentSchoolId && typeof db !== 'undefined') {
+    try {
+      await db.collection('schools').doc(currentSchoolId).collection('agents').add({
+        name: name,
+        schoolId: currentSchoolId,
+        createdAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.warn('Could not persist agent to Firestore:', err.message || err);
+    }
+  }
+  const modal = document.getElementById('modal-add-agent');
+  if (modal) modal.remove();
+  renderAgentsPage();
+  addNotification(`Agent added: ${name}`, 'success');
+}
+
+function renderAgentsPage(filter) {
+  const page = document.getElementById('page-agents');
+  if (!page) return;
+  const searchTerm = ((filter || document.getElementById('agents-search-input')?.value || '') + '').trim().toLowerCase();
+  const allAgents = getUniqueAgentNames();
+  const agents = allAgents.filter(function(name) {
+    return !searchTerm || name.toLowerCase().includes(searchTerm);
+  });
+  const list = document.getElementById('agents-list');
+  if (!list) return;
+  if (agents.length === 0) {
+    list.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text2);">No agents found yet. Add an agent or assign one when enrolling students or creating service clients.</div>';
+    return;
+  }
+  const rows = agents.map(function(name) {
+    const referredStudents = (data.students || []).filter(function(s) { return ((s.agentName || s.agent || '').trim().toLowerCase() === name.toLowerCase()); });
+    const referredServices = (data.otherServices || []).filter(function(s) { return ((s.agentName || s.agent || '').trim().toLowerCase() === name.toLowerCase()); });
+    const total = referredStudents.length + referredServices.length;
+    const studentList = referredStudents.slice(0, 3).map(function(s) { return escapeHtml(s.name || s.clientName || 'Unknown'); }).join(', ');
+    const serviceList = referredServices.slice(0, 3).map(function(s) { return escapeHtml(s.clientName || 'Service Client'); }).join(', ');
+    return '<div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;">' +
+      '<div style="flex:1;min-width:240px;">' +
+        '<div style="font-size:15px;font-weight:700;">' + escapeHtml(name) + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);margin-top:4px;">Referrals: ' + total + ' — Students: ' + referredStudents.length + ', Services: ' + referredServices.length + '</div>' +
+        ((studentList || serviceList) ? '<div style="margin-top:8px;font-size:12px;color:var(--text2);line-height:1.5;">' +
+          (studentList ? '<strong>Students:</strong> ' + studentList + (referredStudents.length > 3 ? ' …' : '') + '<br>' : '') +
+          (serviceList ? '<strong>Clients:</strong> ' + serviceList + (referredServices.length > 3 ? ' …' : '') : '') +
+        '</div>' : '') +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;min-width:160px;">' +
+        '<div style="font-size:22px;font-weight:700;color:var(--primary);">' + total + '</div>' +
+        '<div style="font-size:12px;color:var(--text2);">Total referrals</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  list.innerHTML = rows;
+}
+
 
 // ═══════════════════════════════════════════════════════════
 //  FORMS REGISTRY — Form 5 & Form 14 separate sidebar pages
@@ -12818,6 +13214,13 @@ function openAddOtherServiceModal() {
     <div class="form-grid">
       <div class="form-group"><label>Client Name *</label><input type="text" id="os-client-name" placeholder="Full name"></div>
       <div class="form-group"><label>Phone *</label><input type="tel" id="os-client-phone" placeholder="Phone number"></div>
+      <div class="form-group"><label>Agent (optional)</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input list="os-agent-list" id="os-agent" placeholder="Search or type agent name" style="flex:1;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13.5px;">
+          <button class="btn btn-outline btn-sm" type="button" onclick="focusAgentInput('os-agent')">Search</button>
+        </div>
+        <datalist id="os-agent-list"></datalist>
+      </div>
       <div class="form-group"><label>Vehicle Number</label><input type="text" id="os-vehicle-number" placeholder="e.g. TN01AB1234" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()"></div>
       <div class="form-group"><label>Class of Vehicle *</label>
         <select id="os-vehicle-class">
@@ -12925,6 +13328,7 @@ function openAddOtherServiceModal() {
   </div>`;
   modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
   document.body.appendChild(modal);
+  updateAgentDatalist();
   renderOsServiceOptions();
 }
 
@@ -13094,8 +13498,11 @@ async function saveOtherService() {
     return;
   }
 
+  const agentName = document.getElementById('os-agent') ? document.getElementById('os-agent').value.trim() : '';
   const serviceData = {
     clientName, clientPhone, clientAddress,
+    agentName: agentName,
+    agent: agentName,
     vehicleNumber: document.getElementById('os-vehicle-number')?.value.trim().toUpperCase()||'',
     aadhaar: document.getElementById('os-aadhaar')?.value.trim()||'',
     serviceType: serviceTypeVal,
@@ -13122,6 +13529,7 @@ async function saveOtherService() {
     createdAt: new Date().toISOString()
   };
   try {
+    if (agentName) ensureAgentRegistered(agentName);
     if (currentSchoolId && typeof db !== 'undefined') {
       const ref = await db.collection('schools').doc(currentSchoolId).collection('otherServices').add(serviceData);
       serviceData.id = ref.id;
@@ -13131,6 +13539,8 @@ async function saveOtherService() {
     }
     if (!data.otherServices) data.otherServices = [];
     data.otherServices.push(serviceData);
+    updateAgentDatalist();
+    if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage();
     // Add to cashflow
     if (initialPayment > 0 && currentSchoolId) {
       await FirebaseService.addTransaction({ date: serviceData.date, type: 'income', category: 'Other Service Fee', desc: `Service: ${clientName} — ${serviceData.serviceType}`, amount: initialPayment, schoolId: currentSchoolId });
@@ -14598,6 +15008,13 @@ async function addStaffFromModal() {
     const notes = document.getElementById('staff-notes').value.trim();
     const password = document.getElementById('staff-password').value;
     const confirmPassword = document.getElementById('staff-confirm-password').value;
+    const permissions = {
+      students: document.getElementById('staff-perm-students').checked,
+      transactions: document.getElementById('staff-perm-transactions').checked,
+      attendance: document.getElementById('staff-perm-attendance').checked,
+      reports: document.getElementById('staff-perm-reports').checked,
+      dashboard: document.getElementById('staff-perm-dashboard').checked
+    };
     
     // Validation
     if (!schoolId) {
@@ -14668,6 +15085,7 @@ async function addStaffFromModal() {
       salary: salary ? parseFloat(salary) : 0,
       workType,
       notes,
+      permissions,
       status: 'active',
       schoolId,
       ...FirebaseService.getOwnerScope(schoolId),
@@ -14790,12 +15208,18 @@ async function editStaff(staffId) {
     document.getElementById('staff-salary').value = staff.salary || '';
     document.getElementById('staff-work-type').value = staff.workType || 'full-time';
     document.getElementById('staff-notes').value = staff.notes || '';
+    const perms = staff.permissions || { students: false, transactions: false, attendance: false, reports: false, dashboard: false };
+    document.getElementById('staff-perm-students').checked = Boolean(perms.students);
+    document.getElementById('staff-perm-transactions').checked = Boolean(perms.transactions);
+    document.getElementById('staff-perm-attendance').checked = Boolean(perms.attendance);
+    document.getElementById('staff-perm-reports').checked = Boolean(perms.reports);
+    document.getElementById('staff-perm-dashboard').checked = Boolean(perms.dashboard);
     
     // Change button text and onclick
-    const addBtn = document.querySelector('button[onclick="addStaffFromModal()"]');
-    if (addBtn) {
-      addBtn.textContent = 'Update Staff';
-      addBtn.onclick = () => updateStaff(staffId);
+    const submitBtn = document.getElementById('staff-modal-submit');
+    if (submitBtn) {
+      submitBtn.textContent = 'Update Staff';
+      submitBtn.onclick = () => updateStaff(staffId);
     }
     
     openModal('modal-add-staff');
@@ -14820,6 +15244,13 @@ async function updateStaff(staffId) {
     const salary = document.getElementById('staff-salary').value;
     const workType = document.getElementById('staff-work-type').value;
     const notes = document.getElementById('staff-notes').value.trim();
+    const permissions = {
+      students: document.getElementById('staff-perm-students').checked,
+      transactions: document.getElementById('staff-perm-transactions').checked,
+      attendance: document.getElementById('staff-perm-attendance').checked,
+      reports: document.getElementById('staff-perm-reports').checked,
+      dashboard: document.getElementById('staff-perm-dashboard').checked
+    };
     
     // Validation
     if (!name) {
@@ -14852,6 +15283,7 @@ async function updateStaff(staffId) {
       salary: salary ? parseFloat(salary) : 0,
       workType,
       notes,
+      permissions,
       updatedAt: new Date().toISOString()
     };
     
@@ -14882,10 +15314,10 @@ async function updateStaff(staffId) {
     }
     
     // Reset button
-    const addBtn = document.querySelector('button[onclick*="updateStaff"]');
-    if (addBtn) {
-      addBtn.textContent = 'Add Staff';
-      addBtn.onclick = addStaffFromModal;
+    const submitBtn = document.getElementById('staff-modal-submit');
+    if (submitBtn) {
+      submitBtn.textContent = 'Add Staff';
+      submitBtn.onclick = addStaffFromModal;
     }
     
     // Clear form
@@ -14900,6 +15332,10 @@ async function updateStaff(staffId) {
     document.getElementById('staff-address').value = '';
     document.getElementById('staff-salary').value = '';
     document.getElementById('staff-work-type').value = 'full-time';
+    document.getElementById('staff-perm-students').checked = false;
+    document.getElementById('staff-perm-transactions').checked = false;
+    document.getElementById('staff-perm-attendance').checked = false;
+    document.getElementById('staff-perm-reports').checked = false;
     document.getElementById('staff-notes').value = '';
     
     closeModal('modal-add-staff');
@@ -14951,8 +15387,39 @@ async function removeStaff(staffId) {
 }
 
 // Open staff modal with school dropdown populated
+function resetStaffModalFields() {
+  const fields = [
+    'staff-school','staff-name','staff-email','staff-phone','staff-password','staff-confirm-password',
+    'staff-role','staff-department','staff-employee-id','staff-joining-date','staff-address',
+    'staff-salary','staff-work-type','staff-notes'
+  ];
+  fields.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.type === 'checkbox' || el.type === 'radio') {
+      el.checked = false;
+    } else {
+      el.value = '';
+    }
+  });
+  document.getElementById('staff-role').value = 'instructor';
+  document.getElementById('staff-department').value = 'training';
+  document.getElementById('staff-work-type').value = 'full-time';
+  document.getElementById('staff-perm-students').checked = false;
+  document.getElementById('staff-perm-transactions').checked = false;
+  document.getElementById('staff-perm-attendance').checked = false;
+  document.getElementById('staff-perm-reports').checked = false;
+  document.getElementById('staff-perm-dashboard').checked = false;
+  const submitBtn = document.getElementById('staff-modal-submit');
+  if (submitBtn) {
+    submitBtn.textContent = 'Add Staff';
+    submitBtn.onclick = addStaffFromModal;
+  }
+}
+
 function openStaffModal() {
   populateStaffSchoolDropdown();
+  resetStaffModalFields();
   openModal('modal-add-staff');
 }
 
@@ -15653,7 +16120,27 @@ let _editingFormId  = null;
 let _activeFormType = 'Form 5';
 let _formPhotoDataURL = '';
 
-function openAddFormModal(formType) {
+function populateForm14FromStudent(student) {
+  if (!student) return;
+  var set = function(id, value){ var el = document.getElementById(id); if (el) el.value = value || ''; };
+  set('fm-candidateName', student.name || '');
+  set('fm-phone', student.phone || '');
+  set('fm-address', student.address || '');
+  set('fm-guardianName', student.agentName || student.guardianName || '');
+  set('fm-dob', student.dob || '');
+  set('fm-enrollDate', student.enrolled || '');
+  set('fm-llNumber', student.llNumber || '');
+  set('fm-llValidity', student.llValidity || '');
+  set('fm-dlNumber', student.dlNumber || '');
+  set('fm-dlValidFrom', student.dlValidFrom || '');
+  set('fm-dlValidTo', student.dlValidUpto || student.dlValidTo || '');
+  set('fm-llAppNumber', student.llAppNumber || '');
+  set('fm-llAppDob', student.llAppDob || '');
+  set('fm-dlAppNumber', student.dlAppNumber || '');
+  set('fm-dlAppDob', student.dlAppDob || '');
+}
+
+function openAddFormModal(formType, studentId) {
   _editingFormId  = null;
   _activeFormType = formType || 'Form 5';
   if (!currentSchoolId && userSchools.length === 1) {
@@ -15668,12 +16155,18 @@ function openAddFormModal(formType) {
   ['fm-serialNo','fm-candidateName','fm-phone','fm-address','fm-vehicleClass',
    'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice',
    'fm-guardianName','fm-dob','fm-enrollDate','fm-endDate14',
+   'fm-llNumber','fm-llValidity','fm-dlNumber','fm-dlValidFrom','fm-dlValidTo',
+   'fm-llAppNumber','fm-llAppDob','fm-dlAppNumber','fm-dlAppDob',
    'fm-form15-startDate','fm-form15-endDate','fm-form15-instructor','fm-form15-rtoOffice'].forEach(function(id){
     var el = document.getElementById(id); if (el) el.value = '';
   });
   var photoInput = document.getElementById('fm-photo'); if (photoInput) photoInput.value = '';
   var photoPreview = document.getElementById('fm-photo-preview'); if (photoPreview) photoPreview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
   _formPhotoDataURL = '';
+  if (studentId && _activeFormType === 'Form 14') {
+    var student = data.students.find(function(x){ return String(x.firebaseId)===String(studentId) || String(x.id)===String(studentId); });
+    populateForm14FromStudent(student);
+  }
   var school = getCurrentSchool() || {};
   var infoText = school.name ? school.name + (school.address ? ' · ' + school.address : '') : 'No school selected';
   var infoEl = document.getElementById('form-school-info'); if (infoEl) infoEl.textContent = 'School: ' + infoText;
@@ -15718,6 +16211,15 @@ function editFormRecord(id) {
     set('fm-dob',           f.dob);
     set('fm-enrollDate',    f.enrollDate);
     set('fm-endDate14',     f.endDate);
+    set('fm-llNumber',      f.llNumber);
+    set('fm-llValidity',    f.llValidity);
+    set('fm-dlNumber',      f.dlNumber);
+    set('fm-dlValidFrom',   f.dlValidFrom);
+    set('fm-dlValidTo',     f.dlValidTo);
+    set('fm-llAppNumber',   f.llAppNumber);
+    set('fm-llAppDob',      f.llAppDob);
+    set('fm-dlAppNumber',   f.dlAppNumber);
+    set('fm-dlAppDob',      f.dlAppDob);
     var photoPreview = document.getElementById('fm-photo-preview');
     var photoInput = document.getElementById('fm-photo');
     if (photoInput) photoInput.value = '';
@@ -15797,6 +16299,15 @@ async function saveFormRecord() {
     record.dob           = get('fm-dob');
     record.enrollDate    = get('fm-enrollDate');
     record.endDate       = get('fm-endDate14');
+    record.llNumber      = get('fm-llNumber');
+    record.llValidity    = get('fm-llValidity');
+    record.dlNumber      = get('fm-dlNumber');
+    record.dlValidFrom   = get('fm-dlValidFrom');
+    record.dlValidTo     = get('fm-dlValidTo');
+    record.llAppNumber   = get('fm-llAppNumber');
+    record.llAppDob      = get('fm-llAppDob');
+    record.dlAppNumber   = get('fm-dlAppNumber');
+    record.dlAppDob      = get('fm-dlAppDob');
     if (_formPhotoDataURL) {
       record.photoDataUrl = _formPhotoDataURL;
     } else if (_editingFormId) {
@@ -16021,6 +16532,42 @@ function populateFormFromStudentId(value) {
         <div class="form-group">
           <label>Completion Date</label>
           <input type="date" id="fm-endDate14">
+        </div>
+        <div class="form-group">
+          <label>LL Number</label>
+          <input type="text" id="fm-llNumber" placeholder="LL number">
+        </div>
+        <div class="form-group">
+          <label>LL Validity</label>
+          <input type="date" id="fm-llValidity">
+        </div>
+        <div class="form-group">
+          <label>DL Number</label>
+          <input type="text" id="fm-dlNumber" placeholder="DL number">
+        </div>
+        <div class="form-group">
+          <label>DL Valid From</label>
+          <input type="date" id="fm-dlValidFrom">
+        </div>
+        <div class="form-group">
+          <label>DL Valid To</label>
+          <input type="date" id="fm-dlValidTo">
+        </div>
+        <div class="form-group">
+          <label>LL Application Number</label>
+          <input type="text" id="fm-llAppNumber" placeholder="LL application number">
+        </div>
+        <div class="form-group">
+          <label>LL Applicant DOB</label>
+          <input type="date" id="fm-llAppDob">
+        </div>
+        <div class="form-group">
+          <label>DL Application Number</label>
+          <input type="text" id="fm-dlAppNumber" placeholder="DL application number">
+        </div>
+        <div class="form-group">
+          <label>DL Applicant DOB</label>
+          <input type="date" id="fm-dlAppDob">
         </div>
         <div class="form-group full">
           <label>Upload Trainee Photo</label>
