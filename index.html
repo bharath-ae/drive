@@ -6367,7 +6367,9 @@ async function renderOverallStudents() {
     totalFee:acc.totalFee+s.totalFee, paid:acc.paid+s.paid
   }), {total:0,active:0,completed:0,pending:0,totalFee:0,paid:0});
 
-  allStudents.sort((a,b)=>a.name.localeCompare(b.name));
+  allStudents.sort(function(a,b) {
+    return getStudentIdSortValue(b).localeCompare(getStudentIdSortValue(a));
+  });
 
   let html = '<div class="page-header"><h2>All Students</h2><p>Students from all your driving schools</p></div>';
 
@@ -7533,6 +7535,19 @@ function renderDashboard() {
 // ============================================================
 // STUDENTS
 // ============================================================
+function getStudentIdSortValue(student) {
+  const rawId = (student.studentId || '').toString().trim();
+  if (rawId) {
+    const numeric = rawId.match(/\d+/g);
+    if (numeric) {
+      return numeric.join('').padStart(12, '0') + '|' + rawId.toUpperCase();
+    }
+    return rawId.toUpperCase();
+  }
+  const fallback = (student.firebaseId || student.id || '').toString().trim();
+  return fallback.toUpperCase();
+}
+
 function renderStudentsTable(filter='', statusFilter='') {
   const tb = document.getElementById('students-table');
   if(!tb) return;
@@ -7564,6 +7579,10 @@ function renderStudentsTable(filter='', statusFilter='') {
     });
   }
   if(statusFilter) rows = rows.filter(function(s) { return s.status===statusFilter; });
+
+  rows.sort(function(a, b) {
+    return getStudentIdSortValue(b).localeCompare(getStudentIdSortValue(a));
+  });
 
   if (rows.length === 0) {
     const hint = filter ? (' matching <strong>"' + filter + '"</strong>') : (statusFilter ? ' with status <strong>' + statusFilter + '</strong>' : '');
@@ -7710,6 +7729,7 @@ async function addStudentFromModal() {
     const qsInstName = qsInstEl ? (qsInstEl.options[qsInstEl.selectedIndex] ? qsInstEl.options[qsInstEl.selectedIndex].text : qsInstValue) : '';
     const studentData = {
       name, phone,
+      createdAt: new Date().toISOString(),
       vehicle: document.getElementById('qs-vehicle').value,
       agentName: agentName,
       agent: agentName,
@@ -7813,6 +7833,7 @@ async function enrollStudent() {
     const sInstName = sInstEl ? (sInstEl.options[sInstEl.selectedIndex] ? sInstEl.options[sInstEl.selectedIndex].text : sInstValue) : '';
     const studentData = {
       name, phone,
+      createdAt: new Date().toISOString(),
       agentName: agentName,
       agent: agentName,
       email: document.getElementById('s-email').value,
