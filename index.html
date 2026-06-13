@@ -12105,7 +12105,10 @@ function generateStudentInvoice(id) {
       const balance = totalFee - paid;
       const installments = s.installments||[];
       const today = new Date().toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
-      const schoolName = (userSchools.find(function(sc){return sc.id===currentSchoolId;})||{}).name || 'First Gear School';
+      const school = (userSchools.find(function(sc){return sc.id===currentSchoolId;})||{});
+      const schoolName = school.name || 'First Gear School';
+      const schoolAddress = school.address || '';
+      const schoolPhone = school.phone || '';
 
       // Build installments table rows
       let instRows = '';
@@ -12143,6 +12146,8 @@ function generateStudentInvoice(id) {
           '<tr>' +
             '<th colspan="2" style="padding:28px 32px;text-align:left;background:#2563eb;color:#ffffff;">' +
               '<div style="font-size:22px;font-weight:800;">' + schoolName + '</div>' +
+              (schoolAddress ? '<div style="margin-top:8px;font-size:13px;opacity:.85;">' + schoolAddress + '</div>' : '') +
+              (schoolPhone ? '<div style="font-size:13px;opacity:.85;">📞 ' + schoolPhone + '</div>' : '') +
               '<div style="margin-top:8px;font-size:13px;opacity:.85;">Premium driving school services for learners, renewals, and RTO support.</div>' +
             '</th>' +
             '<th style="padding:28px 32px;text-align:right;background:#111827;color:#ffffff;">' +
