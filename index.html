@@ -725,6 +725,7 @@
           <div><h2>Select School</h2><p>Choose a school to view detailed data</p></div>
           <div class="flex gap-10">
             <span id="selector-date" style="color:var(--text2);font-size:13px;padding:8px 14px;background:white;border:1px solid var(--border);border-radius:8px;"></span>
+            <button id="restore-school-btn" class="btn btn-secondary" onclick="restoreDeletedSchool()" style="padding:8px 14px; font-size:13px;" disabled>🔄 Restore Deleted School</button>
             <button class="btn btn-accent" data-action="create_school" onclick="openCreateSchoolWithManagerModal()">+ Create New School</button>
           </div>
         </div>
@@ -3541,8 +3542,74 @@ let currentUser = null;
 let currentRole = null;
 let currentSchoolId = null;
 let userSchools = [];
+let lastDeletedSchoolBackup = null;
 let currentPage = null;
 let messaging = null;
+
+function getDeletedSchoolBackupStorage() {
+  try {
+    return JSON.parse(localStorage.getItem('deletedSchoolBackups') || '{}');
+  } catch (error) {
+    console.warn('Could not read deleted school backups from storage:', error);
+    return {};
+  }
+}
+
+function saveDeletedSchoolBackupToStorage(backup) {
+  try {
+    const storage = getDeletedSchoolBackupStorage();
+    storage[backup.id] = backup;
+    localStorage.setItem('deletedSchoolBackups', JSON.stringify(storage));
+  } catch (error) {
+    console.warn('Could not save deleted school backup to storage:', error);
+  }
+}
+
+async function saveDeletedSchoolBackupToFirestore(backup) {
+  if (typeof db === 'undefined' || db === null) return;
+  try {
+    await db.collection('deletedSchools').doc(backup.id).set(backup);
+  } catch (error) {
+    console.warn('Could not save deleted school backup to Firestore:', error.message || error);
+  }
+}
+
+async function fetchLatestDeletedSchoolBackupForOwner() {
+  if (typeof db === 'undefined' || db === null || !currentUser) return null;
+  try {
+    const snapshot = await db.collection('deletedSchools')
+      .where('ownerId', '==', currentUser.uid)
+      .limit(1)
+      .get();
+    if (!snapshot.empty) {
+      return snapshot.docs[0].data();
+    }
+  } catch (error) {
+    console.warn('Could not query deletedSchools backups:', error.message || error);
+  }
+  return null;
+}
+
+function updateRestoreButtonState() {
+  const btn = document.getElementById('restore-school-btn');
+  if (!btn) return;
+  const storage = getDeletedSchoolBackupStorage();
+  const hasLocalBackup = Object.keys(storage).length > 0;
+  btn.disabled = !hasLocalBackup && !currentUser;
+}
+
+function escapeForInlineJs(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+function asJsString(value) {
+  return `'${escapeForInlineJs(value)}'`;
+}
 let firebaseFunctions = null;
 const FCM_VAPID_KEY =
   (typeof process !== 'undefined' && process.env && process.env.FCM_VAPID_KEY) ||
@@ -4803,14 +4870,15 @@ async function loadUserSchools() {
     userSchools = await FirebaseService.getUserSchools(currentUser.uid);
     
     const schoolSelect = document.getElementById('school-select');
-    schoolSelect.innerHTML = '<option value="">Select your school...</option>';
-    
-    userSchools.forEach(school => {
-      const option = document.createElement('option');
-      option.value = school.id;
-      option.textContent = school.name;
-      schoolSelect.appendChild(option);
-    });
+    if (schoolSelect) {
+      schoolSelect.innerHTML = '<option value="">Select your school...</option>';
+      userSchools.forEach(school => {
+        const option = document.createElement('option');
+        option.value = school.id;
+        option.textContent = school.name;
+        schoolSelect.appendChild(option);
+      });
+    }
     
   } catch (error) {
     console.error('Error loading user schools:', error);
@@ -4826,25 +4894,27 @@ async function loadUserMemberSchools() {
     const memberSchools = userSchools; // Keep for UI updates
     
     const schoolSelect = document.getElementById('school-select');
-    schoolSelect.innerHTML = '<option value="">Select your school...</option>';
-    
-    if (memberSchools.length === 0) {
-      // No schools found, show message
-      const option = document.createElement('option');
-      option.value = '';
-      option.textContent = 'No schools available';
-      option.disabled = true;
-      schoolSelect.appendChild(option);
-    } else {
-      memberSchools.forEach(school => {
+    if (schoolSelect) {
+      schoolSelect.innerHTML = '<option value="">Select your school...</option>';
+      
+      if (memberSchools.length === 0) {
+        // No schools found, show message
         const option = document.createElement('option');
-        option.value = school.id;
-        option.textContent = school.name;
-        if (school.userRole) {
-          option.textContent += ` (${school.userRole})`;
-        }
+        option.value = '';
+        option.textContent = 'No schools available';
+        option.disabled = true;
         schoolSelect.appendChild(option);
-      });
+      } else {
+        memberSchools.forEach(school => {
+          const option = document.createElement('option');
+          option.value = school.id;
+          option.textContent = school.name;
+          if (school.userRole) {
+            option.textContent += ` (${school.userRole})`;
+          }
+          schoolSelect.appendChild(option);
+        });
+      }
     }
     
   } catch (error) {
@@ -6594,6 +6664,7 @@ async function renderSchoolSelector() {
   try {
     console.log('Loading user schools...');
     await loadUserSchools();
+    userSchools = (userSchools || []).filter(Boolean);
     console.log('userSchools after loading:', userSchools);
   } catch (error) {
     console.error('Error loading schools:', error);
@@ -6616,28 +6687,32 @@ async function renderSchoolSelector() {
       schoolsGrid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text2);">No schools available. Create your first school to get started.</div>';
     } else {
       console.log('Rendering schools:', userSchools.map(s => s.name));
-      schoolsGrid.innerHTML = userSchools.map(school => `
-        <div class="school-card" style="border:2px solid var(--border); border-radius:12px; padding:20px; transition:all 0.2s; position: relative;">
-          <button onclick="deleteSchool('${school.id}', '${school.name}')" style="position: absolute; top:10px; right:10px; background:var(--danger); color:white; border:none; border-radius:50%; width:30px; height:30px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; z-index:10;" title="Delete School">×</button>
-          <button onclick="openEditSchoolModal('${school.id}')" style="position: absolute; top:10px; right:50px; background:var(--accent2); color:white; border:none; border-radius:20px; padding:4px 12px; cursor:pointer; font-size:12px; z-index:10;" title="Edit School Details">⚙️ Edit</button>
-          <div onclick="selectSchoolForView('${school.id}', '${school.name}')" style="cursor:pointer;">
-            <div style="display:flex;align-items:center;gap:15px;margin-bottom:15px;">
-              <div class="avatar" style="background:var(--accent);color:white;width:50px;height:50px;font-size:20px;border-radius:12px;">${school.name.charAt(0)}</div>
-              <div>
-                <div style="font-weight:600;font-size:16px;color:var(--text);">${school.name}</div>
-                <div style="font-size:12px;color:var(--text2);">Owner View</div>
+      schoolsGrid.innerHTML = userSchools.map(school => {
+        const safeSchoolId = escapeForInlineJs(school.id);
+        const safeSchoolName = escapeForInlineJs(school.name);
+        return `
+          <div class="school-card" style="border:2px solid var(--border); border-radius:12px; padding:20px; transition:all 0.2s; position: relative;">
+            <button onclick="deleteSchool(event, '${safeSchoolId}', '${safeSchoolName}')" style="position: absolute; top:10px; right:10px; background:var(--danger); color:white; border:none; border-radius:50%; width:30px; height:30px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; z-index:10;" title="Delete School">×</button>
+            <button onclick="openEditSchoolModal('${safeSchoolId}')" style="position: absolute; top:10px; right:50px; background:var(--accent2); color:white; border:none; border-radius:20px; padding:4px 12px; cursor:pointer; font-size:12px; z-index:10;" title="Edit School Details">⚙️ Edit</button>
+            <div onclick="selectSchoolForView('${safeSchoolId}', '${safeSchoolName}')" style="cursor:pointer;">
+              <div style="display:flex;align-items:center;gap:15px;margin-bottom:15px;">
+                <div class="avatar" style="background:var(--accent);color:white;width:50px;height:50px;font-size:20px;border-radius:12px;">${school.name.charAt(0)}</div>
+                <div>
+                  <div style="font-weight:600;font-size:16px;color:var(--text);">${school.name}</div>
+                  <div style="font-size:12px;color:var(--text2);">Owner View</div>
+                </div>
               </div>
-            </div>
-            <div style="border-top:1px solid var(--border);padding-top:15px;margin-top:15px;">
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;">
-                <div><strong>Status:</strong> <span class="badge badge-green">Active</span></div>
-                <div><strong>Students:</strong> <span style="color:var(--text2);">View in dashboard</span></div>
-                <div><strong>Revenue:</strong> <span style="color:var(--success);">View in cashflow</span></div>
+              <div style="border-top:1px solid var(--border);padding-top:15px;margin-top:15px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px;">
+                  <div><strong>Status:</strong> <span class="badge badge-green">Active</span></div>
+                  <div><strong>Students:</strong> <span style="color:var(--text2);">View in dashboard</span></div>
+                  <div><strong>Revenue:</strong> <span style="color:var(--success);">View in cashflow</span></div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     }
   } else {
     console.log('Schools grid not found! Checking if page is visible...');
@@ -6658,6 +6733,8 @@ async function renderSchoolSelector() {
       console.log(`Page ${index}: id=${page.id}, classes=${page.className}`);
     });
   }
+
+  updateRestoreButtonState();
 }
 
 // Modal functions for school creation with manager
@@ -7010,9 +7087,11 @@ async function saveSchoolDetails(schoolId) {
   }
 }
 
-async function deleteSchool(schoolId, schoolName) {
+async function deleteSchool(event, schoolId, schoolName) {
   // Prevent event bubbling to avoid triggering school selection
-  event.stopPropagation();
+  if (event && typeof event.stopPropagation === 'function') {
+    event.stopPropagation();
+  }
   
   // Check if user has permission to delete schools
   if (!hasActionPermission('delete_school')) {
@@ -7026,27 +7105,112 @@ async function deleteSchool(schoolId, schoolName) {
   if (!confirmed) return;
   
   try {
+    // Build a restore backup for accidental delete
+    const schoolRef = db.collection('schools').doc(schoolId);
+    const schoolDoc = await schoolRef.get();
+    const schoolData = schoolDoc.exists ? schoolDoc.data() : null;
+    const backup = {
+      id: schoolId,
+      name: schoolName,
+      school: schoolData,
+      collections: {},
+      ownerId: schoolData?.ownerId || null,
+      ownerEmail: schoolData?.ownerEmail || null,
+      deletedAt: new Date().toISOString()
+    };
+
+    const subcollections = ['students','transactions','dlTests','attendance','studentAttendance','staffAttendance','schedule','fuel','notifications','users','staff','vehicles'];
+    for (const collectionName of subcollections) {
+      try {
+        const snapshot = await schoolRef.collection(collectionName).get();
+        backup.collections[collectionName] = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+      } catch (e) {
+        console.warn('Could not back up', collectionName, e.message);
+        backup.collections[collectionName] = [];
+      }
+    }
+
+    lastDeletedSchoolBackup = backup;
+    saveDeletedSchoolBackupToStorage(backup);
+    await saveDeletedSchoolBackupToFirestore(backup);
+
     // Delete school from Firebase
     await FirebaseService.deleteSchool(schoolId);
-    
-    // Remove from local array
+
+    // Remove from local array and refresh page state
     userSchools = userSchools.filter(school => school.id !== schoolId);
-    
-    // If this was the current school, reset currentSchoolId
     if (currentSchoolId === schoolId) {
       currentSchoolId = null;
       FirebaseService.setSchool(null);
+      if (typeof switchToOverallView === 'function') {
+        switchToOverallView();
+      }
     }
-    
+
     // Show success notification
-    addNotification(`School "${schoolName}" has been deleted successfully`, 'success');
-    
-    // Refresh the school selector
-    renderSchoolSelector();
+    addNotification(`School "${schoolName}" has been deleted successfully. Use Restore Deleted School to recover it.`, 'success');
+
+    // Refresh the school selector and dashboard counts
+    await renderSchoolSelector();
+    await renderOverallDashboard();
+    updateRestoreButtonState();
     
   } catch (error) {
     console.error('Error deleting school:', error);
     addNotification('Failed to delete school. Please try again.', 'error');
+  }
+}
+
+async function restoreDeletedSchool() {
+  let backup = lastDeletedSchoolBackup;
+  if (!backup || !backup.school) {
+    const storage = getDeletedSchoolBackupStorage();
+    const ids = Object.keys(storage);
+    if (ids.length > 0) {
+      backup = storage[ids[ids.length - 1]];
+    }
+  }
+
+  if ((!backup || !backup.school) && currentUser) {
+    backup = await fetchLatestDeletedSchoolBackupForOwner();
+  }
+
+  if (!backup || !backup.school) {
+    alert('No deleted school backup available to restore.');
+    return;
+  }
+
+  try {
+    const schoolRef = db.collection('schools').doc(backup.id);
+    await schoolRef.set({
+      ...backup.school,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      restoredAt: new Date().toISOString()
+    });
+
+    const collectionNames = Object.keys(backup.collections || {});
+    for (const collectionName of collectionNames) {
+      const docs = backup.collections[collectionName] || [];
+      for (const doc of docs) {
+        await schoolRef.collection(collectionName).doc(doc.id).set(doc.data);
+      }
+    }
+
+    if (!userSchools.find(s => s.id === backup.id)) {
+      userSchools.push({ id: backup.id, name: backup.name, ownerId: backup.ownerId, ownerEmail: backup.ownerEmail });
+    }
+
+    lastDeletedSchoolBackup = backup;
+    saveDeletedSchoolBackupToStorage(backup);
+    await loadUserSchools();
+    updateRestoreButtonState();
+    await renderSchoolSelector();
+    await renderOverallDashboard();
+
+    addNotification(`School "${backup.name}" restored successfully.`, 'success');
+  } catch (restoreError) {
+    console.error('Restore deleted school failed:', restoreError);
+    alert('Unable to restore the deleted school. Please check your connection and try again.');
   }
 }
 
@@ -8783,8 +8947,8 @@ function renderReport() {
       catMap[cat].count++;
     });
 
-    // Transaction rows (latest 20)
-    const recent = monthTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); }).slice(0,20);
+    // Transaction rows for the selected month
+    const recent = monthTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 
     const catRows = Object.keys(catMap).map(function(cat){
       var c = catMap[cat];
@@ -8835,7 +8999,7 @@ function renderReport() {
           '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Category Breakdown</div>' +
           catRows +
         '</div>' +
-        (txRows ? '<div class="report-body" style="margin-top:18px;"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Recent Transactions (latest 20)</div>' + txRows + '</div>' : '') +
+        (txRows ? '<div class="report-body" style="margin-top:18px;"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">All Transactions for the month</div>' + txRows + '</div>' : '') +
       '</div>';
     return;
   }
@@ -12764,80 +12928,68 @@ function printFormRecord(id, formTypeCode) {
 </div>
 </body></html>`;
   } else {
-    // Form 14 — Training Register (pink register style)
+    // Form 14 — Exact government form layout
     formHTML = `
 <!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>Form 14 - ${f.candidateName||''}</title>
 <style>
-  @page { size: A4; margin: 15mm; }
+  @page { size: A4; margin: 12mm; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family: 'Times New Roman', serif; font-size: 13px; color: #000; }
-  h1 { font-size: 16px; font-weight: bold; text-align: center; margin-bottom: 3px; }
-  .school-addr { font-size: 11px; text-align: center; color: #333; margin-bottom: 6px; }
-  .form-title { font-size: 14px; font-weight: bold; text-align: center; margin: 8px 0; }
-  .rule-ref { font-size: 11px; text-align: center; margin-bottom: 14px; }
-  table.reg { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  table.reg td { border: 1.5px solid #333; padding: 8px 10px; font-size: 12.5px; vertical-align: top; }
-  table.reg td.label { background: #fce7f3; font-weight: 500; width: 55%; }
-  table.reg td.value { font-weight: bold; min-height: 28px; }
-  .header-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; border: 2px solid #333; padding: 10px 14px; }
-  .sig-section { margin-top: 24px; display: flex; justify-content: space-between; align-items: flex-end; }
-  .sig-line { border-top: 1px solid #000; width: 150px; margin-top: 30px; }
-  .reg-no { font-size: 18px; font-weight: bold; color: #cc0000; float: right; }
+  body { font-family: 'Times New Roman', serif; font-size: 12px; color: #000; }
+  .page { padding: 18px; }
+  .center { text-align: center; }
+  .school-name { font-size: 18px; font-weight: bold; letter-spacing: 0.06em; }
+  .subhead { font-size: 11px; margin-top: 4px; }
+  .note { font-size: 11px; margin: 2px 0 10px; }
+  .table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  .table td { border: 1px solid #000; padding: 8px 10px; vertical-align: top; font-size: 12px; }
+  .table td.label { width: 28%; font-weight: 600; }
+  .table td.value { width: 72%; }
+  .small-text { font-size: 10.5px; color: #333; }
+  .signature-row { display: flex; justify-content: space-between; margin-top: 22px; }
+  .signature-block { width: 45%; }
+  .signature-line { border-top: 1px solid #000; margin-top: 36px; width: 100%; }
+  .footer-note { font-size: 10.5px; text-align: right; margin-top: 6px; }
 </style></head><body>
-<div style="border: 2.5px solid #333; padding: 18px 22px;">
-  <span class="reg-no">${f.serialNo||''}</span>
-  <div style="font-size:11px;color:#555;margin-bottom:4px;">Rule 27 (a) and (b)</div>
-  <div style="font-size:12px;margin-bottom:4px;">Register of Trainees at Driving School — <strong>${schoolName}</strong></div>
-  <h1>${schoolName}</h1>
-  <div class="school-addr">${schoolAddress}${schoolPhone ? ' · 📞 ' + schoolPhone : ''}</div>
-  ${licenseNo ? '<div class="school-addr">Licence No. ' + licenseNo + '</div>' : ''}
-  <div class="form-title">FORM 14</div>
-  <div class="rule-ref">(Registration of Trainees at Driving School or Establishment)</div>
+<div class="page">
+  <div class="center note">Refer Rule 27(a) &amp; (c)</div>
+  <div class="center school-name">${schoolName.toUpperCase()}</div>
+  <div class="center subhead">${schoolAddress || ''}${schoolPhone ? ' · 📞 ' + schoolPhone : ''}</div>
+  ${licenseNo ? '<div class="center subhead">Licence No. ' + licenseNo + '</div>' : ''}
+  <div class="center" style="margin-top:10px;font-size:16px;font-weight:bold;">FORM - 14</div>
+  <div class="center note">Register Showing the Enrollment to Trainee(s) in the Driving School Establishment</div>
 
-  <table class="reg">
-    <tr><td class="label">Enrolled Year (ನೋಂದಣಿಯಾದ ವರ್ಷ)</td><td class="value">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td></tr>
-    <tr><td class="label">1. Registration Number (ನೋಂದಣಿ ಸಂಖ್ಯೆ)</td><td class="value">${f.serialNo||''}</td></tr>
-    <tr>
-      <td class="label">2. Name of Trainee (ತರಬೇತಿದಾರರ ಹೆಸರು ಮತ್ತು ಭಾವಚಿತ್ರ)</td>
-      <td class="value" style="display:flex;gap:12px;align-items:flex-start;">
-        <div style="flex:1;">${f.candidateName||''}</div>
-        <div style="width:120px;height:150px;border:1px solid #333;display:flex;align-items:center;justify-content:center;background:#fff;">
-          ${f.photoDataUrl ? '<img src="'+f.photoDataUrl+'" style="max-width:100%;max-height:100%;display:block;" alt="Trainee photo"/>' : '<span style="font-size:11px;color:#555;text-align:center;line-height:1.4;">Photo<br>to be<br>attached</span>'}
-        </div>
-      </td>
-    </tr>
-    <tr><td class="label">3. Son/Wife/Daughter (ಮಗ/ಹೆಂಡತಿ/ಮಗಳು)</td><td class="value">${f.guardianName||''}</td></tr>
-    <tr>
-      <td class="label">4. Address (ವಿಳಾಸ ವಿಕಾಸ)<br>
-        <span style="font-size:11px;">a) Permanent (ತಾತ್ಕಾಲಿಕ ವಿಳಾಸ)</span><br>
-        <span style="font-size:11px;">b) Local (ಕಛೇರಿಯ ವಿಳಾಸ (ಇದ್ದಲ್ಲಿ)) — ${schoolName}</span>
-      </td>
-      <td class="value">${f.address||''}</td>
-    </tr>
-    <tr><td class="label">5. Date of Birth (ಹುಟ್ಟಿದ ದಿನಾಂಕ)</td><td class="value">${f.dob||''}</td></tr>
-    <tr><td class="label">6. Class of vehicle trained in (ಯಾವ ವಾಹನ ವರ್ಗದಲ್ಲಿ ತರಬೇತಿ ಪಡೆಯುತ್ತಾರೆ)</td><td class="value">${f.vehicleClass||''} ${f.vehicleNumber ? '· Vehicle No: ' + f.vehicleNumber : ''}</td></tr>
-    <tr><td class="label">7. Registration Date (ನೋಂದಣಿ ದಿನಾಂಕ)</td><td class="value">${f.enrollDate||''}</td></tr>
-    <tr><td class="label">8. Start and End class no. (ಕಲಿಕೆದಾರನ ಸಂಖ್ಯೆ ಮತ್ತು ಮುಕ್ತಾಯದ ದಿನಾಂಕ)</td><td class="value">${f.startDate||''} — ${f.endDate||''}</td></tr>
-    <tr><td class="label">9. Date of completion (ಪೂರ್ಣ ತರಬೇತಿ ಪಡೆದ ದಿನಾಂಕ)</td><td class="value">${f.endDate||''}</td></tr>
-    <tr><td class="label">10. Date of passing test (ವಾಹನ ಚಾಲನೆ ಮಾಡಲು ಪಾಸಾದ ದಿನಾಂಕ)</td><td class="value">${f.issueDate||''}</td></tr>
-    <tr><td class="label">11. DL Number & Date issued & Authority (ಚಾಲನ ಪತ್ರದ ಸಂಖ್ಯೆ ಮತ್ತು ಪಡೆದ ದಿನಾಂಕ)</td><td class="value">${f.submissionDate||''} · ${f.rtoOffice||''}</td></tr>
-    <tr><td class="label">12. Remarks / Notes (ಅಭಿಪ್ರಾಯ / ಗುರುತುಗಳು)</td><td class="value">${f.remarks||''}</td></tr>
-    <tr><td class="label">13. Signature of trainee (ಅನುಸ್ಚಾನ ಪತ್ರ ಹೊಂದಿದವರ ಸಹಿ/ತರಬೇತಿದಾರರು)</td><td class="value" style="height:40px;"></td></tr>
+  <table class="table">
+    <tr><td class="label">1. Registration Year</td><td class="value">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td></tr>
+    <tr><td class="label">2. Enrollment Number</td><td class="value">${f.serialNo||''}</td></tr>
+    <tr><td class="label">3. Name of the Trainee</td><td class="value">${f.candidateName||''}</td></tr>
+    <tr><td class="label">4. Son of</td><td class="value">${f.guardianName||''}</td></tr>
+    <tr><td class="label">5. Date of Birth</td><td class="value">${f.dob||''}</td></tr>
+    <tr><td class="label">6. Mobile Number</td><td class="value">${f.phone||''}</td></tr>
+    <tr><td class="label">7. Address</td><td class="value">
+      <div><strong>(a)</strong> ${f.address||''}</div>
+      <div style="margin-top:6px;"><strong>(b)</strong> ${schoolName || ''}${schoolAddress ? ', ' + schoolAddress : ''}</div>
+    </td></tr>
+    <tr><td class="label">8. Class of Vehicle for Which Training Imparted</td><td class="value">${f.vehicleClass||''}</td></tr>
+    <tr><td class="label">9. Date of Enrollment</td><td class="value">${f.enrollDate||''}</td></tr>
+    <tr><td class="label">10. Learner's Licence Number / Learner's Licence Validity</td><td class="value">${f.llNumber||''}${f.llNumber && f.llValidity ? ' / ' : ''}${f.llValidity||''}</td></tr>
+    <tr><td class="label">11. Date of Completion of Course</td><td class="value">${f.endDate14||f.endDate||''}</td></tr>
+    <tr><td class="label">12. Date of Passing the Test of Competence to Drive</td><td class="value">${f.issueDate||f.submissionDate||''}</td></tr>
+    <tr><td class="label">13. Driving Licence Number / Date of Issue / Licensing Authority</td><td class="value">${f.dlNumber||''}${f.dlNumber && f.dlValidFrom ? ' / ' + f.dlValidFrom : f.dlValidFrom||''}${(f.dlNumber||f.dlValidFrom) && f.rtoOffice ? ' / ' + f.rtoOffice : ''}</td></tr>
+    <tr><td class="label">14. Remark</td><td class="value">${f.remarks||''}</td></tr>
+    <tr><td class="label">15. Signature of the Licence Holder</td><td class="value" style="height:48px;"></td></tr>
+    <tr><td class="label">16. Signature of the Instructor</td><td class="value" style="height:48px;"></td></tr>
   </table>
 
-  <div class="sig-section">
-    <div>
-      <div class="sig-line"></div>
-      <div style="font-size:11px;margin-top:4px;">Signature of Trainee</div>
-    </div>
-    <div style="text-align:center;">
-      <div style="font-size:11px;margin-bottom:4px;">Date: ${f.issueDate||f.submissionDate||new Date().toLocaleDateString('en-IN')}</div>
-      <div class="sig-line" style="margin:0 auto;"></div>
-      <div style="font-size:11px;margin-top:4px;">${principal ? principal + '<br>' : ''}Principal / ಪ್ರಾಂಶುಪಾಲರು</div>
-      <div style="font-size:11px;font-weight:bold;margin-top:2px;">${schoolName}</div>
+  <div class="signature-row">
+    <div class="signature-block"></div>
+    <div class="signature-block" style="text-align:right;">
+      <div class="signature-line"></div>
+      <div style="font-size:11px;margin-top:4px;">For ${schoolName}</div>
+      <div style="font-size:10px;margin-top:2px;">${principal || 'Principal'}</div>
     </div>
   </div>
+  <div class="footer-note">Printed on ${new Date().toLocaleDateString('en-IN')}</div>
 </div>
 </body></html>`;
   }
@@ -16408,6 +16560,7 @@ async function saveFormRecord() {
     record.dlNumber      = get('fm-dlNumber');
     record.dlValidFrom   = get('fm-dlValidFrom');
     record.dlValidTo     = get('fm-dlValidTo');
+    record.remarks       = get('fm-remarks');
     record.llAppNumber   = get('fm-llAppNumber');
     record.llAppDob      = get('fm-llAppDob');
     record.dlAppNumber   = get('fm-dlAppNumber');
@@ -16538,6 +16691,12 @@ function populateFormFromStudentId(value) {
   if (student.address) setVal('fm-address', student.address);
   if (student.dob) setVal('fm-dob', student.dob);
   if (student.enrolled) setVal('fm-enrollDate', student.enrolled);
+  if (student.agentName || student.guardianName) setVal('fm-guardianName', student.agentName || student.guardianName);
+  if (student.llNumber) setVal('fm-llNumber', student.llNumber);
+  if (student.llValidity) setVal('fm-llValidity', student.llValidity);
+  if (student.dlNumber) setVal('fm-dlNumber', student.dlNumber);
+  if (student.dlValidFrom) setVal('fm-dlValidFrom', student.dlValidFrom);
+  if (student.dlValidTo) setVal('fm-dlValidTo', student.dlValidTo);
 
   var vehicleClass = mapStudentVehicleClass(student.vehicle || '');
   if (vehicleClass) setVal('fm-vehicleClass', vehicleClass);
@@ -16645,33 +16804,17 @@ function populateFormFromStudentId(value) {
           <label>LL Validity</label>
           <input type="date" id="fm-llValidity">
         </div>
-        <div class="form-group">
+        <div class="form-group" style="flex:1 1 100%;">
           <label>DL Number</label>
           <input type="text" id="fm-dlNumber" placeholder="DL number">
         </div>
         <div class="form-group">
-          <label>DL Valid From</label>
+          <label>DL Issue Date</label>
           <input type="date" id="fm-dlValidFrom">
         </div>
         <div class="form-group">
-          <label>DL Valid To</label>
-          <input type="date" id="fm-dlValidTo">
-        </div>
-        <div class="form-group">
-          <label>LL Application Number</label>
-          <input type="text" id="fm-llAppNumber" placeholder="LL application number">
-        </div>
-        <div class="form-group">
-          <label>LL Applicant DOB</label>
-          <input type="date" id="fm-llAppDob">
-        </div>
-        <div class="form-group">
-          <label>DL Application Number</label>
-          <input type="text" id="fm-dlAppNumber" placeholder="DL application number">
-        </div>
-        <div class="form-group">
-          <label>DL Applicant DOB</label>
-          <input type="date" id="fm-dlAppDob">
+          <label>Licensing Authority</label>
+          <input type="text" id="fm-rtoOffice" placeholder="RTO / licensing authority">
         </div>
         <div class="form-group full">
           <label>Upload Trainee Photo</label>
@@ -16679,6 +16822,10 @@ function populateFormFromStudentId(value) {
         </div>
         <div class="form-group full">
           <div id="fm-photo-preview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #cbd5e1;border-radius:8px;padding:12px;color:#6b7280;font-size:12px;">No photo selected</div>
+        </div>
+        <div class="form-group full">
+          <label>Remarks</label>
+          <textarea id="fm-remarks" rows="2" placeholder="Any notes"></textarea>
         </div>
       </div>
     </div>
