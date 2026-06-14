@@ -876,14 +876,18 @@
 
       <div class="page" id="page-reports">
         <div class="page-header">
-          <div><h2>📊 Reports</h2><p>Monthly &amp; yearly financial reports</p></div>
+          <div><h2>📊 Reports</h2><p>Daily, monthly &amp; yearly financial reports</p></div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <select id="report-period" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;" onchange="onReportPeriodChange()">
               <option value="monthly">Monthly</option>
               <option value="yearly">Yearly</option>
+              <option value="daily">Daily</option>
             </select>
             <input type="month" id="report-month-filter"
               style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;"
+              onchange="renderReport()">
+            <input type="date" id="report-day-filter"
+              style="display:none;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;"
               onchange="renderReport()">
             <select id="report-year-filter"
               style="display:none;padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:13px;"
@@ -6222,7 +6226,7 @@ function renderAllData() {
   // Owner-only renders
   if (currentRole === 'owner') {
     renderCashflow();
-    (function(){ var mf=document.getElementById('report-month-filter'); if(mf&&!mf.value) mf.value=new Date().toISOString().slice(0,7); onReportPeriodChange(); })();
+    (function(){ var mf=document.getElementById('report-month-filter'); var df=document.getElementById('report-day-filter'); if(mf&&!mf.value) mf.value=new Date().toISOString().slice(0,7); if(df&&!df.value) df.value=new Date().toISOString().slice(0,10); onReportPeriodChange(); })();
     renderDLTests();
     renderAdminsTable();
     renderOwnerFuelDashboard();
@@ -6234,7 +6238,7 @@ function renderAllData() {
   // Office renders
   if (currentRole === 'office') {
     renderCashflow();
-    (function(){ var mf=document.getElementById('report-month-filter'); if(mf&&!mf.value) mf.value=new Date().toISOString().slice(0,7); onReportPeriodChange(); })();
+    (function(){ var mf=document.getElementById('report-month-filter'); var df=document.getElementById('report-day-filter'); if(mf&&!mf.value) mf.value=new Date().toISOString().slice(0,7); if(df&&!df.value) df.value=new Date().toISOString().slice(0,10); onReportPeriodChange(); })();
     renderDLTests();
     loadOtherServices();
   }
@@ -8882,8 +8886,10 @@ async function addTransaction() {
 function onReportPeriodChange() {
   const period = document.getElementById('report-period')?.value || 'monthly';
   const mf = document.getElementById('report-month-filter');
+  const df = document.getElementById('report-day-filter');
   const yf = document.getElementById('report-year-filter');
   if (mf) mf.style.display = period === 'monthly' ? '' : 'none';
+  if (df) df.style.display = period === 'daily' ? '' : 'none';
   if (yf) yf.style.display = period === 'yearly'  ? '' : 'none';
   renderReport();
 }
@@ -8907,6 +8913,10 @@ function _populateReportYearFilter() {
 // ──────────────────────────────────────────────────────────
 //  Main renderReport — Monthly & Yearly, fully data-driven
 // ──────────────────────────────────────────────────────────
+function getReportDescription(tx) {
+  return tx.description || tx.desc || tx.note || tx.details || tx.narration || tx.particulars || tx.notes || '';
+}
+
 function renderReport() {
   const period = document.getElementById('report-period')?.value || 'monthly';
   const rc = document.getElementById('report-content');
@@ -8925,14 +8935,84 @@ function renderReport() {
                       'July','August','September','October','November','December'];
   const generated = new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'});
 
+  // ── DAILY VIEW ────────────────────────────────────────────
+  if (period === 'daily') {
+    const df = document.getElementById('report-day-filter');
+    const selDate = (df && df.value) ? df.value : new Date().toISOString().slice(0,10);
+    const dayTx = schoolTx.filter(function(t){ return (t.date||'') === selDate; });
+    const income  = dayTx.filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    const expense = dayTx.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    const profit  = income - expense;
+
+    const catMap = {};
+    dayTx.forEach(function(t){
+      var cat = t.category || (t.type==='income' ? 'Income' : 'Expense');
+      if (!catMap[cat]) catMap[cat] = {type:t.type, total:0, count:0};
+      catMap[cat].total += (t.amount||0);
+      catMap[cat].count++;
+    });
+
+    const recent = dayTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    const catRows = Object.keys(catMap).map(function(cat){
+      var c = catMap[cat];
+      var color = c.type==='income' ? 'var(--success)' : 'var(--danger)';
+      return '<div class="report-row">' +
+        '<span>' + cat + ' <span style="font-size:11px;color:var(--text3);">(' + c.count + ' entries)</span></span>' +
+        '<span style="color:' + color + ';font-weight:600;">₹' + c.total.toLocaleString() + '</span>' +
+      '</div>';
+    }).join('') || '<div style="color:var(--text3);padding:12px 0;text-align:center;">No transactions for this day.</div>';
+
+    const txRows = recent.length === 0 ? '' :
+      '<table class="data-table" style="margin-top:8px;">' +
+        '<thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th style="text-align:right">Amount</th></tr></thead>' +
+        '<tbody>' +
+        recent.map(function(t){
+          var color = t.type==='income' ? 'var(--success)' : 'var(--danger)';
+          return '<tr>' +
+            '<td style="font-size:12px;">' + (t.date||'—') + '</td>' +
+            '<td>' + (getReportDescription(t) || '—') + '</td>' +
+            '<td style="font-size:12px;">' + (t.category||'—') + '</td>' +
+            '<td><span class="badge ' + (t.type==='income'?'badge-green':'badge-red') + '">' + (t.type||'—') + '</span></td>' +
+            '<td style="text-align:right;color:' + color + ';font-weight:600;">₹' + (t.amount||0).toLocaleString() + '</td>' +
+          '</tr>';
+        }).join('') +
+        '</tbody></table>';
+
+    rc.innerHTML =
+      '<div class="report-section">' +
+        '<div class="report-header">' +
+          '<h3>Daily Report — ' + selDate + '</h3>' +
+          '<p>' + schoolName + ' &nbsp;|&nbsp; Generated ' + generated + '</p>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin:18px 0;">' +
+          '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;">' +
+            '<div style="font-size:11px;font-weight:600;color:#15803d;text-transform:uppercase;letter-spacing:.05em;">Total Income</div>' +
+            '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:var(--success);margin-top:6px;">₹' + income.toLocaleString() + '</div>' +
+          '</div>' +
+          '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px 18px;">' +
+            '<div style="font-size:11px;font-weight:600;color:#b91c1c;text-transform:uppercase;letter-spacing:.05em;">Total Expense</div>' +
+            '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:var(--danger);margin-top:6px;">₹' + expense.toLocaleString() + '</div>' +
+          '</div>' +
+          '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px 18px;">' +
+            '<div style="font-size:11px;font-weight:600;color:#1d4ed8;text-transform:uppercase;letter-spacing:.05em;">Net Profit</div>' +
+            '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:' + (profit>=0?'var(--accent2)':'var(--danger)') + ';margin-top:6px;">₹' + profit.toLocaleString() + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="report-body">' +
+          '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Category Breakdown</div>' +
+          catRows +
+        '</div>' +
+        (txRows ? '<div class="report-body" style="margin-top:18px;"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">All Transactions for the day</div>' + txRows + '</div>' : '') +
+      '</div>';
+    return;
+  }
+
   // ── MONTHLY VIEW ──────────────────────────────────────────
   if (period === 'monthly') {
     // Default = current month
     const mf = document.getElementById('report-month-filter');
     const selMonth = (mf && mf.value) ? mf.value : new Date().toISOString().slice(0,7);
     const [selYear, selMon] = selMonth.split('-').map(Number);
-
-    // All transactions for the selected month
     const monthTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selMonth); });
     const income  = monthTx.filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
     const expense = monthTx.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
@@ -8967,7 +9047,7 @@ function renderReport() {
           var color = t.type==='income' ? 'var(--success)' : 'var(--danger)';
           return '<tr>' +
             '<td style="font-size:12px;">' + (t.date||'—') + '</td>' +
-            '<td>' + (t.description||t.note||t.category||'—') + '</td>' +
+            '<td>' + (getReportDescription(t) || '—') + '</td>' +
             '<td style="font-size:12px;">' + (t.category||'—') + '</td>' +
             '<td><span class="badge ' + (t.type==='income'?'badge-green':'badge-red') + '">' + (t.type||'—') + '</span></td>' +
             '<td style="text-align:right;color:' + color + ';font-weight:600;">₹' + (t.amount||0).toLocaleString() + '</td>' +
@@ -9108,10 +9188,13 @@ function switchCFChart(mode, el) {
 function exportReportPDF() {
   const period = document.getElementById('report-period')?.value || 'monthly';
   const mf = document.getElementById('report-month-filter');
+  const df = document.getElementById('report-day-filter');
   const yf = document.getElementById('report-year-filter');
   const label = period === 'monthly'
     ? (mf && mf.value ? mf.value : new Date().toISOString().slice(0,7))
-    : (yf && yf.value ? yf.value : new Date().getFullYear());
+    : period === 'daily'
+      ? (df && df.value ? df.value : new Date().toISOString().slice(0,10))
+      : (yf && yf.value ? yf.value : new Date().getFullYear());
 
   const schoolName = (function(){
     var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
@@ -9165,6 +9248,7 @@ function exportReportPDF() {
 function exportReportExcel() {
   const period = document.getElementById('report-period')?.value || 'monthly';
   const mf = document.getElementById('report-month-filter');
+  const df = document.getElementById('report-day-filter');
   const yf = document.getElementById('report-year-filter');
 
   const schoolTx = (data.transactions||[]).filter(function(t){
@@ -9211,7 +9295,7 @@ function exportReportExcel() {
     sorted.forEach(function(t){
       rows.push([
         t.date || '',
-        t.description || t.note || '',
+        getReportDescription(t),
         t.category || '',
         t.type || '',
         t.amount || 0
@@ -9222,6 +9306,33 @@ function exportReportExcel() {
     rows.push(['', '', '', 'Total Expense', expense]);
     rows.push(['', '', '', 'Net Profit', income - expense]);
 
+  } else if (period === 'daily') {
+    const selDate = (df && df.value) ? df.value : new Date().toISOString().slice(0,10);
+    filename = 'Report_' + selDate;
+
+    const dayTx = schoolTx.filter(function(t){ return (t.date||'') === selDate; });
+    const income  = dayTx.filter(function(t){ return t.type==='income';  }).reduce(function(s,t){ return s+(t.amount||0); },0);
+    const expense = dayTx.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
+
+    rows.push([schoolName]);
+    rows.push(['Daily Financial Report — ' + selDate]);
+    rows.push(['Generated', new Date().toLocaleDateString('en-IN')]);
+    rows.push([]);
+    rows.push(['SUMMARY']);
+    rows.push(['Total Income', income]);
+    rows.push(['Total Expense', expense]);
+    rows.push(['Net Profit', income - expense]);
+    rows.push([]);
+    rows.push(['TRANSACTIONS']);
+    rows.push(['Date', 'Description', 'Category', 'Type', 'Amount (₹)']);
+    var sortedDay = dayTx.slice().sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    sortedDay.forEach(function(t){
+      rows.push([t.date||'', getReportDescription(t), t.category||'', t.type||'', t.amount||0]);
+    });
+    rows.push([]);
+    rows.push(['', '', '', 'Total Income', income]);
+    rows.push(['', '', '', 'Total Expense', expense]);
+    rows.push(['', '', '', 'Net Profit', income - expense]);
   } else {
     const selYear = (yf && yf.value) ? yf.value : String(new Date().getFullYear());
     filename = 'Report_Yearly_' + selYear;
@@ -9268,7 +9379,7 @@ function exportReportExcel() {
     var yearTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selYear); })
                          .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
     yearTx.forEach(function(t){
-      rows.push([t.date||'', t.description||t.note||'', t.category||'', t.type||'', t.amount||0]);
+      rows.push([t.date||'', getReportDescription(t), t.category||'', t.type||'', t.amount||0]);
     });
   }
 
