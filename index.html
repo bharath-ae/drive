@@ -2445,15 +2445,59 @@
 
         if (typeof db !== 'undefined' && currentSchoolId) {
           const existingAtt = {};
-          Promise.all(myStudents.map(s => {
-            const fid = s.firebaseId || s.id;
-            return db.collection('schools').doc(currentSchoolId).collection('studentAttendance')
-              .doc(dateStr + '_' + fid).get()
-              .then(doc => { if (doc.exists) existingAtt[fid] = doc.data().status; })
-              .catch(() => {});
-          })).then(() => {
+          let cachedRecords = getAttendanceRecordsForDate(dateStr);
+          if (!cachedRecords.length) {
+            const localRecords = loadLocalAttendanceRecords(dateStr);
+            if (Object.keys(localRecords).length) {
+              cachedRecords = Object.values(localRecords);
+              setAttendanceRecordsForDate(dateStr, cachedRecords);
+            }
+          }
+
+          if (cachedRecords.length) {
+            cachedRecords.forEach(rec => {
+              const fid = rec.studentId || (rec.studentName || '').replace(/\s/g,'_');
+              if (fid) existingAtt[fid] = rec.status || '';
+            });
             buildAttGrid(myStudents, existingAtt, grid);
-          });
+          } else {
+            db.collection('schools').doc(currentSchoolId).collection('studentAttendance')
+              .where('date','==', dateStr)
+              .get()
+              .then(snapshot => {
+                const records = [];
+                const recordMap = {};
+                snapshot.docs.forEach(doc => {
+                  const att = doc.data() || {};
+                  const fid = att.studentId || doc.id.replace(dateStr + '_', '');
+                  if (fid) {
+                    const rec = { ...att, studentId: att.studentId || fid };
+                    recordMap[fid] = rec;
+                    records.push(rec);
+                  }
+                });
+                setAttendanceRecordsForDate(dateStr, records);
+                saveLocalAttendanceRecords(dateStr, recordMap);
+                Object.keys(recordMap).forEach(fid => {
+                  existingAtt[fid] = recordMap[fid] && recordMap[fid].status ? recordMap[fid].status : '';
+                });
+                buildAttGrid(myStudents, existingAtt, grid);
+              })
+              .catch(() => {
+                const localRecords = loadLocalAttendanceRecords(dateStr);
+                if (Object.keys(localRecords).length) {
+                  const localArray = Object.values(localRecords);
+                  setAttendanceRecordsForDate(dateStr, localArray);
+                  localArray.forEach(rec => {
+                    const fid = rec.studentId || (rec.studentName || '').replace(/\s/g,'_');
+                    if (fid) existingAtt[fid] = rec.status || '';
+                  });
+                  buildAttGrid(myStudents, existingAtt, grid);
+                } else {
+                  buildAttGrid(myStudents, {}, grid);
+                }
+              });
+          }
         } else {
           buildAttGrid(myStudents, {}, grid);
         }
@@ -2540,8 +2584,21 @@
           schoolId: currentSchoolId || ''
         };
 
+        const userKey = (typeof getAttendanceUserKey === 'function') ? getAttendanceUserKey(currentUser) : (currentUser ? (currentUser.displayName || currentUser.email || currentUser.uid) : 'Unknown');
+        if (currentRole === 'office' || currentRole === 'admin') {
+          data.adminAttendance = data.adminAttendance || {};
+          data.adminAttendance[today] = data.adminAttendance[today] || {};
+          data.adminAttendance[today][userKey] = attEntry;
+        } else {
+          data.instructorAttendance = data.instructorAttendance || {};
+          data.instructorAttendance[today] = data.instructorAttendance[today] || {};
+          data.instructorAttendance[today][userKey] = attEntry;
+        }
+        data.attendance = data.attendance || {};
+        data.attendance[today] = data.attendance[today] || {};
+        data.attendance[today][userKey] = attEntry;
+
         try {
-          const userKey = (typeof getAttendanceUserKey === 'function') ? getAttendanceUserKey(currentUser) : (currentUser ? (currentUser.displayName || currentUser.email || currentUser.uid) : 'Unknown');
           if (typeof FirebaseService !== 'undefined' && typeof FirebaseService.updateAttendanceByType === 'function') {
             try {
               const collectionName = (currentRole === 'office' || currentRole === 'admin') ? 'adminAttendance' : 'instructorAttendance';
@@ -2584,45 +2641,44 @@
         const tbody = document.getElementById('att-history-body');
         if (!tbody) return;
         const today = new Date().toISOString().split('T')[0];
-        const thisMonth = today.slice(0,7);
         try {
           let records = [];
           let todayEntry = null;
-          // Try role-specific attendance collection first
-          if (typeof FirebaseService !== 'undefined' && typeof FirebaseService.getAttendanceByType === 'function' && currentUser) {
-            const userKey = (typeof getAttendanceUserKey === 'function') ? getAttendanceUserKey(currentUser) : (currentUser ? (currentUser.displayName || currentUser.email || currentUser.uid) : 'Unknown');
-            const collectionName = (currentRole === 'office' || currentRole === 'admin') ? 'adminAttendance' : 'instructorAttendance';
-            for (let i = 0; i < 30; i++) {
-              const date = new Date(Date.now() - i * 86400000).toISOString().split('T')[0];
-              try {
-                const doc = await FirebaseService.getAttendanceByType(date, collectionName);
-                if (doc && doc[userKey]) {
-                  const entry = { ...doc[userKey], date };
-                  records.push(entry);
-                  if (date === today) todayEntry = entry;
-                }
-              } catch(e) { /* ignore individual date failures */ }
-            }
+          const userKey = (typeof getAttendanceUserKey === 'function') ? getAttendanceUserKey(currentUser) : (currentUser ? (currentUser.displayName || currentUser.email || currentUser.uid) : 'Unknown');
+          const collectionName = (currentRole === 'office' || currentRole === 'admin') ? 'adminAttendance' : 'instructorAttendance';
+
+          if (typeof FirebaseService !== 'undefined' && typeof FirebaseService.getAttendanceHistoryByType === 'function') {
+            const history = await FirebaseService.getAttendanceHistoryByType(collectionName, 30);
+            records = history.map(doc => {
+              if (!doc || !doc[userKey]) return null;
+              return { ...doc[userKey], date: doc.date || '' };
+            }).filter(Boolean);
+            todayEntry = records.find(r => r.date === today);
           } else if (typeof db !== 'undefined' && currentSchoolId && currentUser) {
+            const thisMonth = today.slice(0,7);
             const snap = await db.collection('schools').doc(currentSchoolId).collection('attendance')
               .where('userEmail','==', currentUser.email)
               .where('date','>=', thisMonth + '-01')
               .orderBy('date','desc').limit(30).get();
             records = snap.docs.map(d => d.data());
+            todayEntry = records.find(r => r.date === today);
           }
-          let present=0, absent=0, late=0;
+
+          let present = 0, absent = 0, late = 0;
           records.forEach(r => {
-            if(r.status==='present') present++;
-            else if(r.status==='absent') absent++;
-            else if(r.status==='late') late++;
+            if (r.status === 'present') present++;
+            else if (r.status === 'absent') absent++;
+            else if (r.status === 'late') late++;
           });
+
           const total = records.length;
-          const rate = total > 0 ? Math.round(((present+late)/total)*100) : 0;
+          const rate = total > 0 ? Math.round(((present + late) / total) * 100) : 0;
           const onTime = present;
           ['stat-days-present','stat-days-absent','stat-att-rate','stat-on-time'].forEach((id,i) => {
             const el = document.getElementById(id);
-            if(el) el.textContent = [present, absent, rate+'%', onTime][i];
+            if (el) el.textContent = [present, absent, rate+'%', onTime][i];
           });
+
           if (todayEntry) {
             selfMarked = true;
             const banner = document.getElementById('self-att-banner');
@@ -2640,13 +2696,15 @@
             const nextCard = document.getElementById('next-steps-card');
             if (nextCard) nextCard.style.display = 'block';
           }
+
           if (records.length === 0) {
             tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text2);">No attendance records yet.</td></tr>';
             return;
           }
+
           tbody.innerHTML = records.map(r => {
-            const cls = r.status==='present'?'badge-green':r.status==='late'?'badge-amber':'badge-red';
-            return '<tr><td>'+r.date+'</td><td>'+r.time+'</td><td><span class="badge '+cls+'">'+r.status+'</span></td><td>'+r.location+'</td><td>'+(r.note||'—')+'</td></tr>';
+            const cls = r.status === 'present' ? 'badge-green' : r.status === 'late' ? 'badge-amber' : 'badge-red';
+            return '<tr><td>' + r.date + '</td><td>' + r.time + '</td><td><span class="badge ' + cls + '">' + r.status + '</span></td><td>' + r.location + '</td><td>' + (r.note || '—') + '</td></tr>';
           }).join('');
         } catch(e) {
           console.warn('Could not load attendance history:', e.message);
@@ -2782,7 +2840,7 @@
           const absentReason = card.dataset.absentReason || '';
           if (!studentName) return;
 
-          records.push({
+          const rec = {
             date: today,
             studentName,
             studentId: studentId || '',
@@ -2793,7 +2851,24 @@
             instructorName: getCurrentInstructorName() || (currentUser ? currentUser.email : ''),
             schoolId: currentSchoolId || '',
             savedAt: new Date().toISOString()
-          });
+          };
+          records.push(rec);
+        });
+
+        const recordMap = {};
+        records.forEach(rec => {
+          const fid = rec.studentId || rec.studentName.replace(/\s/g,'_');
+          if (fid) recordMap[fid] = rec;
+        });
+        setAttendanceRecordsForDate(today, records);
+        saveLocalAttendanceRecords(today, recordMap);
+
+        cards.forEach(card => {
+          const studentName = card.dataset.student;
+          const studentId   = card.dataset.studentId;
+          const status      = card.dataset.status || '';
+          const absentReason = card.dataset.absentReason || '';
+          if (!studentName) return;
 
           if ((status === 'present' || status === 'late') && studentId) {
             const student = data.students.find(s => (s.firebaseId || s.id) === studentId);
@@ -2801,7 +2876,6 @@
               const newClasses = (student.classes || 0) + 1;
               const totalClasses = student.totalClasses || 27;
               student.classes = newClasses;
-              // Auto-complete if all classes done
               if (newClasses >= totalClasses && student.status !== 'Completed') {
                 student.status = 'Completed';
                 completedStudents.push({ ...student, classes: newClasses, id: studentId });
@@ -3720,6 +3794,92 @@ async function getEditSchoolLocation() {
 // Initialize Firebase — deferred until DOM is ready so all CDN scripts have executed
 let auth, db, analytics;
 
+window.firestoreReadTracker = window.firestoreReadTracker || {
+  reads: 0,
+  debug: true,
+  addReads(count, source) {
+    this.reads += count;
+    if (this.debug && console && console.log) {
+      console.log(`[Firestore ReadTracker] +${count} (${source || 'unknown'}) => ${this.reads}`);
+    }
+  },
+  reset() {
+    this.reads = 0;
+    if (console && console.log) console.log('[Firestore ReadTracker] reset to 0');
+  },
+  log(prefix = 'Firestore reads generated:') {
+    if (console && console.log) console.log(prefix, this.reads);
+  },
+  trackSnapshot(snapshot, source) {
+    if (!snapshot) return;
+    const count = (snapshot.docs && Array.isArray(snapshot.docs)) ? snapshot.docs.length : 1;
+    this.addReads(count || 1, source || 'onSnapshot initial');
+  }
+};
+
+function instrumentFirestoreReads() {
+  if (typeof firebase === 'undefined' || !firebase.firestore) return;
+  try {
+    const docGet = firebase.firestore.DocumentReference.prototype.get;
+    firebase.firestore.DocumentReference.prototype.get = async function(...args) {
+      const result = await docGet.apply(this, args);
+      window.firestoreReadTracker.addReads(1, 'DocumentReference.get');
+      return result;
+    };
+
+    const queryGet = firebase.firestore.Query.prototype.get;
+    firebase.firestore.Query.prototype.get = async function(...args) {
+      const snapshot = await queryGet.apply(this, args);
+      const count = (snapshot.docs && Array.isArray(snapshot.docs)) ? snapshot.docs.length : 0;
+      window.firestoreReadTracker.addReads(count, 'Query.get');
+      return snapshot;
+    };
+
+    const wrapObserver = (observer, source, firstState) => {
+      if (typeof observer === 'function') {
+        return function(snapshot) {
+          if (firstState.first) {
+            firstState.first = false;
+            window.firestoreReadTracker.trackSnapshot(snapshot, source);
+          }
+          return observer.apply(this, arguments);
+        };
+      }
+      if (observer && typeof observer.next === 'function') {
+        return {
+          ...observer,
+          next(snapshot) {
+            if (firstState.first) {
+              firstState.first = false;
+              window.firestoreReadTracker.trackSnapshot(snapshot, source);
+            }
+            return observer.next.apply(this, arguments);
+          }
+        };
+      }
+      return observer;
+    };
+
+    const docOnSnapshot = firebase.firestore.DocumentReference.prototype.onSnapshot;
+    firebase.firestore.DocumentReference.prototype.onSnapshot = function(...args) {
+      const firstState = { first: true };
+      const wrapped = args.map(arg => wrapObserver(arg, 'DocumentReference.onSnapshot', firstState));
+      return docOnSnapshot.apply(this, wrapped);
+    };
+
+    const queryOnSnapshot = firebase.firestore.Query.prototype.onSnapshot;
+    firebase.firestore.Query.prototype.onSnapshot = function(...args) {
+      const firstState = { first: true };
+      const wrapped = args.map(arg => wrapObserver(arg, 'Query.onSnapshot', firstState));
+      return queryOnSnapshot.apply(this, wrapped);
+    };
+
+    if (console && console.log) console.log('[Firestore ReadTracker] instrumentation installed');
+  } catch (error) {
+    console.warn('[Firestore ReadTracker] could not install instrumentation:', error && error.message);
+  }
+}
+
 function initFirebase() {
   if (typeof firebase === 'undefined') {
     console.error('Firebase SDK unavailable. Check CDN connectivity.');
@@ -3741,6 +3901,7 @@ function initFirebase() {
     // LOCAL persistence = user stays logged in across refresh/tab close
     auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(e){ console.warn('Persistence set failed:', e.message); });
     db   = firebase.firestore();
+    instrumentFirestoreReads();
     try { analytics = firebase.analytics(); } catch(e) { console.warn('Analytics unavailable:', e.message); }
     try { messaging = firebase.messaging(); } catch(e) { console.warn('Messaging unavailable:', e.message); }
     try { firebaseFunctions = firebase.functions(); } catch(e) { console.warn('Functions unavailable:', e.message); }
@@ -4534,6 +4695,28 @@ const FirebaseService = {
     return doc.exists ? doc.data() : {};
   },
 
+  async getAttendanceHistoryByType(collectionName, limit = 30) {
+    let collectionRef;
+    switch(collectionName) {
+      case 'staffAttendance':
+        collectionRef = this.staffAttendanceRef;
+        break;
+      case 'adminAttendance':
+        collectionRef = this.adminAttendanceRef;
+        break;
+      case 'instructorAttendance':
+        collectionRef = this.instructorAttendanceRef;
+        break;
+      default:
+        collectionRef = this.attendanceRef;
+    }
+    const query = collectionRef
+      .orderBy(firebase.firestore.FieldPath.documentId(), 'desc')
+      .limit(limit);
+    const snapshot = await query.get();
+    return snapshot.docs.map(doc => ({ date: doc.id, ...doc.data() }));
+  },
+
   // Authentication helpers
   async signIn(email, password) {
     if (!auth) {
@@ -4959,11 +5142,71 @@ let data = {
   notifications: [],
   otherServices: [],
   agents: [],
-  studentAttendanceRecords: []
+  studentAttendanceRecords: [],
+  studentAttendanceRecordsByDate: {}
 };
 
 // Real-time listeners array to cleanup later
 const listeners = [];
+
+function getLocalAttendanceStorageKey(schoolId, date) {
+  return 'fg_local_attendance:' + (schoolId || 'global') + ':' + date;
+}
+
+function loadLocalAttendanceRecords(date) {
+  if (!currentSchoolId || !date) return {};
+  try {
+    const raw = localStorage.getItem(getLocalAttendanceStorageKey(currentSchoolId, date));
+    const parsed = raw ? JSON.parse(raw) : {};
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveLocalAttendanceRecords(date, records) {
+  if (!currentSchoolId || !date || !records || typeof records !== 'object') return;
+  try {
+    const existing = loadLocalAttendanceRecords(date);
+    const merged = { ...existing };
+    Object.keys(records).forEach(key => {
+      merged[key] = records[key];
+    });
+    localStorage.setItem(getLocalAttendanceStorageKey(currentSchoolId, date), JSON.stringify(merged));
+  } catch (e) {
+    console.warn('Could not save local attendance records:', e.message || e);
+  }
+}
+
+function getAttendanceRecordsForDate(date) {
+  if (!date) return [];
+  const byDate = data.studentAttendanceRecordsByDate && data.studentAttendanceRecordsByDate[date];
+  if (byDate) return Object.values(byDate);
+  return (Array.isArray(data.studentAttendanceRecords) ? data.studentAttendanceRecords.filter(r => r.date === date) : []);
+}
+
+function getAttendanceRecordForStudent(date, studentId, studentName) {
+  if (!date) return null;
+  const byDate = data.studentAttendanceRecordsByDate && data.studentAttendanceRecordsByDate[date];
+  if (byDate) {
+    const fid = studentId || (studentName || '').replace(/\s/g,'_');
+    return byDate[fid] || Object.values(byDate).find(r => (studentId && r.studentId === studentId) || r.studentName === studentName) || null;
+  }
+  return (Array.isArray(data.studentAttendanceRecords) ? data.studentAttendanceRecords.find(r => r.date === date && ((studentId && r.studentId === studentId) || r.studentName === studentName)) : null);
+}
+
+function setAttendanceRecordsForDate(date, records) {
+  if (!date || !Array.isArray(records)) return;
+  data.studentAttendanceRecordsByDate = data.studentAttendanceRecordsByDate || {};
+  const map = {};
+  records.forEach(r => {
+    const fid = r.studentId || (r.studentName || '').replace(/\s/g,'_');
+    if (fid) map[fid] = r;
+  });
+  data.studentAttendanceRecordsByDate[date] = map;
+  data.studentAttendanceRecords = Object.values(data.studentAttendanceRecordsByDate)
+    .reduce((all, dateMap) => all.concat(Object.values(dateMap)), []);
+}
 
 // Load initial data from Firebase
 async function loadInitialData() {
@@ -5326,15 +5569,14 @@ async function verifyUserRole(userId, selectedRole) {
         
         if (ownerDoc.exists) {
           console.log('Owner found in collection, validating subscription...');
-          // Validate subscription for owner
-          await validateSubscriptionForRole(userId, userEmail, 'owner');
+          // Pass pre-fetched owner data so validateSubscriptionForRole can avoid a second read
+          await validateSubscriptionForRole(userId, userEmail, 'owner', ownerDoc.data());
           console.log('Owner access granted for email:', userEmail);
           return 'owner';
         } else {
           console.log('Owner access denied: email not in owners list:', userEmail);
-          // Try to list all owners to debug
-          const allOwners = await db.collection('Owners').get();
-          console.log('All owners in collection:', allOwners.docs.map(doc => doc.id));
+          // NOTE: Full collection scan removed — was costing N reads on every failed login.
+          // To debug a missing owner, check the Owners collection in the Firebase console.
           return null;
         }
       } catch (error) {
@@ -5473,14 +5715,22 @@ function hasPageAccess(pageId) {
 }
 
 // Check owner subscription and show renewal message if needed
-async function checkOwnerSubscription(userEmail) {
+async function checkOwnerSubscription(userEmail, prefetchedOwnerData) {
   try {
-    const ownerDoc = await db.collection('Owners').doc(userEmail.trim()).get();
-    if (!ownerDoc.exists) {
+    // Accept pre-fetched data to avoid a redundant Owners read when the
+    // caller (verifyUserRole) already retrieved the doc moments ago.
+    let ownerData = prefetchedOwnerData;
+    if (ownerData === undefined) {
+      const ownerDoc = await db.collection('Owners').doc(userEmail.trim()).get();
+      if (!ownerDoc.exists) {
+        return { valid: false, message: 'You are not authorized for this role' };
+      }
+      ownerData = ownerDoc.data();
+    }
+    if (!ownerData) {
       return { valid: false, message: 'You are not authorized for this role' };
     }
     
-    const ownerData = ownerDoc.data();
     console.log('Owner data for subscription check:', ownerData);
     
     // Check if document has subscription fields
@@ -5507,11 +5757,11 @@ async function checkOwnerSubscription(userEmail) {
 }
 
 // Check subscription for any user (owner, staff, admin) based on their school
-async function checkUserSubscription(userId, userEmail, selectedRole) {
+async function checkUserSubscription(userId, userEmail, selectedRole, prefetchedOwnerData) {
   try {
     if (selectedRole === 'owner') {
-      // For owners, check their direct subscription
-      return await checkOwnerSubscription(userEmail);
+      // For owners, check their direct subscription; pass pre-fetched data if available
+      return await checkOwnerSubscription(userEmail, prefetchedOwnerData);
     } else {
       // For staff/admin, check their school's subscription (linked to owner)
       const memberSchools = await FirebaseService.getUserMemberSchools(userId);
@@ -5551,7 +5801,7 @@ async function checkUserSubscription(userId, userEmail, selectedRole) {
 }
 
 // Enhanced subscription validation for all user types
-async function validateSubscriptionForRole(userId, userEmail, selectedRole) {
+async function validateSubscriptionForRole(userId, userEmail, selectedRole, prefetchedOwnerData) {
   console.log(`Validating subscription for ${selectedRole}: ${userEmail}`);
   
   let ownerEmail = null;
@@ -5612,7 +5862,8 @@ async function validateSubscriptionForRole(userId, userEmail, selectedRole) {
   // Only check subscription if the owner is in the pause list
   if (isOwnerOnpause) {
     console.log(`Owner ${ownerEmail} is in pause list, checking subscription...`);
-    const subscriptionCheck = await checkUserSubscription(userId, ownerEmail, 'owner');
+    // For owners, pass pre-fetched data to avoid a redundant Owners doc read
+    const subscriptionCheck = await checkUserSubscription(userId, ownerEmail, 'owner', selectedRole === 'owner' ? prefetchedOwnerData : undefined);
     
     if (!subscriptionCheck.valid) {
       const userRoleText = selectedRole === 'owner' ? 'Your' : `Your owner's`;
@@ -9685,7 +9936,7 @@ function exportReportPDF() {
     <h1>${schoolName}</h1>
     <div class="sub">Financial Report — ${label} &nbsp;|&nbsp; Generated ${new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</div>
     ${rcEl.innerHTML}
-    <script>window.onload=function(){ window.print(); }<\/script>
+    ${'<' + 'script>window.onload=function(){ window.print(); }' + '<' + '/script>'}
   </body></html>`);
   win.document.close();
 }
@@ -13032,7 +13283,7 @@ function printInvoice() {
     '@page{margin:18mm;}' +
     '@media print{button{display:none!important;}body{padding:0;margin:0;background:#ffffff;}}' +
     '</style></head><body>' + content.innerHTML +
-    '<script>window.onload=function(){window.print();window.close();}<' + '/script>' +
+    '<' + 'script>window.onload=function(){window.print();window.close();}' + '<' + '/script>' +
     '</body></html>';
   win.document.open();
   win.document.write(html);
@@ -14804,7 +15055,14 @@ async function loadStudentAttendanceForTracking(date) {
   if (!currentSchoolId || typeof db === 'undefined') return;
   try {
     const snap = await db.collection('schools').doc(currentSchoolId).collection('studentAttendance').where('date','==',date).get();
-    data.studentAttendanceRecords = snap.docs.map(d=>({id:d.id,...d.data()}));
+    const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    setAttendanceRecordsForDate(date, records);
+    const recordMap = {};
+    records.forEach(rec => {
+      const fid = rec.studentId || (rec.studentName || '').replace(/\s/g,'_');
+      if (fid) recordMap[fid] = rec;
+    });
+    saveLocalAttendanceRecords(date, recordMap);
   } catch(e) { console.warn('Could not load tracking attendance:', e.message); }
 }
 
