@@ -3597,9 +3597,8 @@ async function fetchLatestDeletedSchoolBackupForOwner() {
 function updateRestoreButtonState() {
   const btn = document.getElementById('restore-school-btn');
   if (!btn) return;
-  const storage = getDeletedSchoolBackupStorage();
-  const hasLocalBackup = Object.keys(storage).length > 0;
-  btn.disabled = !hasLocalBackup && !currentUser;
+  // Enable for any authenticated owner — the modal will query Firestore for deletable schools
+  btn.disabled = !currentUser || currentRole !== 'owner';
 }
 
 function escapeForInlineJs(value) {
@@ -4169,9 +4168,9 @@ service cloud.firestore {
 //            24 h for stable collections (students, staff…).
 // ============================================================
 const FGCache = {
-  TTL_SHORT:  5   * 60 * 1000,   // 5 min  — transactions, fuel, notifications
-  TTL_MEDIUM: 30  * 60 * 1000,   // 30 min — dlTests, otherServices, forms, schedule
-  TTL_LONG:   24  * 60 * 60 * 1000, // 24 h — students, admins, staff
+  TTL_SHORT:  15  * 60 * 1000,   // 15 min — transactions, fuel, notifications (was 5 min)
+  TTL_MEDIUM: 60  * 60 * 1000,   // 1 h    — dlTests, otherServices, forms, schedule (was 30 min)
+  TTL_LONG:   48  * 60 * 60 * 1000, // 48 h — students, admins, staff (was 24 h)
 
   _key(schoolId, collection) {
     return 'fgc:' + (schoolId || 'x') + ':' + collection;
@@ -4233,6 +4232,8 @@ const FirebaseService = {
   get scheduleRef() { return db.collection('schools').doc(currentSchoolId).collection('schedule'); },
   get fuelRef() { return db.collection('schools').doc(currentSchoolId).collection('fuel'); },
   get notificationsRef() { return db.collection('schools').doc(currentSchoolId).collection('notifications'); },
+  get agentsRef() { return db.collection('schools').doc(currentSchoolId).collection('agents'); },
+  get vehiclesRef() { return db.collection('schools').doc(currentSchoolId).collection('vehicles'); },
   
   // Set current school context
   setSchool(schoolId) {
@@ -4595,7 +4596,10 @@ const FirebaseService = {
   async getUserSchools(userId) {
     try {
       const snapshot = await this.schoolsRef.where('ownerId', '==', userId).get();
-      return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Exclude soft-deleted schools (status === 'deleted')
+      return snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter(s => s.status !== 'deleted');
     } catch (error) {
       console.error('Error getting user schools:', error);
       throw error;
@@ -4638,7 +4642,7 @@ const FirebaseService = {
           // Try to fetch school document, but use index data if permission denied
           try {
             const schoolDoc = await this.schoolsRef.doc(schoolId).get();
-            if (schoolDoc.exists) {
+            if (schoolDoc.exists && schoolDoc.data().status !== 'deleted') {
               userSchools.push({
                 id: schoolDoc.id,
                 ...schoolDoc.data(),
@@ -4989,6 +4993,18 @@ async function loadInitialData() {
       if (agents.status === 'fulfilled')       data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
       if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
+      // Load vehicles from Firebase (owner can see all school vehicles)
+      try {
+        const vehCached = FGCache.get(sid, 'vehicles');
+        if (vehCached) {
+          data.vehicles = mergeSchoolData(data.vehicles, vehCached, sid);
+        } else {
+          const vehSnap = await db.collection('schools').doc(sid).collection('vehicles').get();
+          const vehDocs = vehSnap.docs.map(d => ({ id: d.id, firebaseId: d.id, ...d.data(), schoolId: sid }));
+          FGCache.set(sid, 'vehicles', vehDocs, FGCache.TTL_LONG);
+          data.vehicles = mergeSchoolData(data.vehicles, vehDocs, sid);
+        }
+      } catch(e) { console.warn('Could not load vehicles:', e.message); }
     } else if (currentRole === 'office') {
       const [students, transactions, dlTests, notifications, agents, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getStudents(),
@@ -6691,14 +6707,14 @@ async function renderSchoolSelector() {
       schoolsGrid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text2);">No schools available. Create your first school to get started.</div>';
     } else {
       console.log('Rendering schools:', userSchools.map(s => s.name));
-      schoolsGrid.innerHTML = userSchools.map(school => {
-        const safeSchoolId = escapeForInlineJs(school.id);
-        const safeSchoolName = escapeForInlineJs(school.name);
+      // Store refs in a window registry so onclick handlers use numeric index, never raw IDs
+      window._schoolCardRegistry = userSchools.map(s => ({ id: s.id, name: s.name }));
+      schoolsGrid.innerHTML = userSchools.map((school, idx) => {
         return `
           <div class="school-card" style="border:2px solid var(--border); border-radius:12px; padding:20px; transition:all 0.2s; position: relative;">
-            <button onclick="deleteSchool(event, '${safeSchoolId}', '${safeSchoolName}')" style="position: absolute; top:10px; right:10px; background:var(--danger); color:white; border:none; border-radius:50%; width:30px; height:30px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; z-index:10;" title="Delete School">×</button>
-            <button onclick="openEditSchoolModal('${safeSchoolId}')" style="position: absolute; top:10px; right:50px; background:var(--accent2); color:white; border:none; border-radius:20px; padding:4px 12px; cursor:pointer; font-size:12px; z-index:10;" title="Edit School Details">⚙️ Edit</button>
-            <div onclick="selectSchoolForView('${safeSchoolId}', '${safeSchoolName}')" style="cursor:pointer;">
+            <button onclick="_schoolCardDelete(event,${idx})" style="position: absolute; top:10px; right:10px; background:var(--danger); color:white; border:none; border-radius:50%; width:30px; height:30px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center; z-index:10;" title="Delete School">×</button>
+            <button onclick="_schoolCardEdit(${idx})" style="position: absolute; top:10px; right:50px; background:var(--accent2); color:white; border:none; border-radius:20px; padding:4px 12px; cursor:pointer; font-size:12px; z-index:10;" title="Edit School Details">⚙️ Edit</button>
+            <div onclick="_schoolCardSelect(${idx})" style="cursor:pointer;">
               <div style="display:flex;align-items:center;gap:15px;margin-bottom:15px;">
                 <div class="avatar" style="background:var(--accent);color:white;width:50px;height:50px;font-size:20px;border-radius:12px;">${school.name.charAt(0)}</div>
                 <div>
@@ -6739,6 +6755,24 @@ async function renderSchoolSelector() {
   }
 
   updateRestoreButtonState();
+}
+
+// ── School card dispatchers — use numeric index, never raw IDs in HTML ────────
+function _schoolCardDelete(event, idx) {
+  if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+  const reg = window._schoolCardRegistry;
+  if (!reg || !reg[idx]) return;
+  deleteSchool(event, reg[idx].id, reg[idx].name);
+}
+function _schoolCardEdit(idx) {
+  const reg = window._schoolCardRegistry;
+  if (!reg || !reg[idx]) return;
+  openEditSchoolModal(reg[idx].id);
+}
+function _schoolCardSelect(idx) {
+  const reg = window._schoolCardRegistry;
+  if (!reg || !reg[idx]) return;
+  selectSchoolForView(reg[idx].id, reg[idx].name);
 }
 
 // Modal functions for school creation with manager
@@ -6943,6 +6977,7 @@ function closeAdminInviteSuccessModal() {
 // Delete school function
 // ── EDIT SCHOOL DETAILS (licenseNo, principal, signature) ──────────────
 function openEditSchoolModal(schoolId) {
+  window._pendingEditSchoolId = schoolId; // store safely — never inject into HTML
   event.stopPropagation();
   const school = (userSchools||[]).find(s=>s.id===schoolId) || {};
   const old = document.getElementById('modal-edit-school');
@@ -7018,7 +7053,7 @@ function openEditSchoolModal(schoolId) {
       </div>
     </div>
     <div style="margin-top:20px;display:flex;gap:10px;">
-      <button class="btn btn-accent" onclick="saveSchoolDetails('${schoolId}')">💾 Save Details</button>
+      <button class="btn btn-accent" onclick="saveSchoolDetails()">💾 Save Details</button>
       <button class="btn btn-outline" onclick="document.getElementById('modal-edit-school').remove()">Cancel</button>
     </div>
   </div>`;
@@ -7026,7 +7061,9 @@ function openEditSchoolModal(schoolId) {
   document.body.appendChild(modal);
 }
 
-async function saveSchoolDetails(schoolId) {
+async function saveSchoolDetails() {
+  const schoolId = window._pendingEditSchoolId;
+  if (!schoolId) { alert("No school selected for editing."); return; }
   const name      = document.getElementById('esc-name')?.value.trim();
   const address   = document.getElementById('esc-address')?.value.trim();
   const phone     = document.getElementById('esc-phone')?.value.trim();
@@ -7103,119 +7140,464 @@ async function deleteSchool(event, schoolId, schoolName) {
     return;
   }
   
-  // Confirm deletion
-  const confirmed = confirm(`Are you sure you want to delete "${schoolName}"? This action cannot be undone and will remove all associated data including students, transactions, and records.`);
-  
-  if (!confirmed) return;
+  // Custom confirmation with recovery information
+  window._pendingDeleteSchool = { id: schoolId, name: schoolName };
+  const modal = document.createElement('div');
+  modal.id = 'modal-confirm-delete-school';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML = `
+    <div class="modal" style="width:480px;max-width:96vw;">
+      <div class="modal-header">
+        <h3 style="color:var(--danger);">🗑 Delete School</h3>
+        <button class="modal-close" onclick="document.getElementById('modal-confirm-delete-school').remove()">✕</button>
+      </div>
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px;margin-bottom:18px;">
+        <div style="font-weight:700;font-size:15px;margin-bottom:6px;">⚠️ ${schoolName}</div>
+        <div style="font-size:13px;color:var(--text);">This school will be <strong>soft-deleted</strong> and hidden from your dashboard.</div>
+      </div>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 16px;margin-bottom:18px;font-size:13px;">
+        <div style="font-weight:600;color:var(--accent2);margin-bottom:6px;">🔄 Recovery Window</div>
+        <ul style="color:var(--text);margin-left:16px;line-height:2;">
+          <li>You have <strong>15 days</strong> to recover this school.</li>
+          <li>Use the <strong>"Restore Deleted School"</strong> button on the School Selector page.</li>
+          <li>After 15 days the school and all its data will be <strong>permanently deleted</strong>.</li>
+        </ul>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-danger" style="flex:1;" onclick="confirmSoftDeleteSchool()">🗑 Yes, Delete (15-day recovery)</button>
+        <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('modal-confirm-delete-school').remove()">Cancel</button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function confirmSoftDeleteSchool() {
+  const _op = window._pendingDeleteSchool || {};
+  const schoolId = _op.id; const schoolName = _op.name;
+  window._pendingDeleteSchool = null;
+  const confirmModal = document.getElementById('modal-confirm-delete-school');
+  if (confirmModal) confirmModal.remove();
   
   try {
-    // Build a restore backup for accidental delete
     const schoolRef = db.collection('schools').doc(schoolId);
     const schoolDoc = await schoolRef.get();
     const schoolData = schoolDoc.exists ? schoolDoc.data() : null;
+
+    const deleteAt = new Date();
+    deleteAt.setDate(deleteAt.getDate() + 15); // 15-day purge deadline
+
+    // Soft-delete: mark the school document, do NOT delete subcollections
+    await schoolRef.set({
+      ...(schoolData || {}),
+      status: 'deleted',
+      deletedAt: new Date().toISOString(),
+      purgeAfter: deleteAt.toISOString(),
+      deletedBy: currentUser ? currentUser.uid : null
+    }, { merge: true });
+
+    // Remove from userSchools index so it doesn't show in dashboard
+    const ownerId = schoolData?.ownerId || (currentUser ? currentUser.uid : null);
+    if (ownerId) {
+      try {
+        await db.collection('userSchools').doc(ownerId).set({
+          schoolIds: firebase.firestore.FieldValue.arrayRemove(schoolId),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch(e) { console.warn('Could not update userSchools index:', e.message); }
+    }
+
+    // Save lightweight localStorage backup (schoolId + name + deletedAt, NOT all data — saves reads)
     const backup = {
       id: schoolId,
       name: schoolName,
-      school: schoolData,
-      collections: {},
-      ownerId: schoolData?.ownerId || null,
-      ownerEmail: schoolData?.ownerEmail || null,
-      deletedAt: new Date().toISOString()
+      ownerId: ownerId,
+      ownerEmail: schoolData?.ownerEmail || (currentUser ? currentUser.email : null),
+      deletedAt: new Date().toISOString(),
+      purgeAfter: deleteAt.toISOString()
     };
-
-    const subcollections = ['students','transactions','dlTests','attendance','studentAttendance','staffAttendance','schedule','fuel','notifications','users','staff','vehicles'];
-    for (const collectionName of subcollections) {
-      try {
-        const snapshot = await schoolRef.collection(collectionName).get();
-        backup.collections[collectionName] = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
-      } catch (e) {
-        console.warn('Could not back up', collectionName, e.message);
-        backup.collections[collectionName] = [];
-      }
-    }
-
-    lastDeletedSchoolBackup = backup;
+    lastDeletedSchoolBackup = { ...backup, school: schoolData, collections: {} };
     saveDeletedSchoolBackupToStorage(backup);
-    await saveDeletedSchoolBackupToFirestore(backup);
 
-    // Delete school from Firebase
-    await FirebaseService.deleteSchool(schoolId);
-
-    // Remove from local array and refresh page state
+    // Remove from local array
     userSchools = userSchools.filter(school => school.id !== schoolId);
     if (currentSchoolId === schoolId) {
       currentSchoolId = null;
       FirebaseService.setSchool(null);
-      if (typeof switchToOverallView === 'function') {
-        switchToOverallView();
-      }
+      if (typeof switchToOverallView === 'function') switchToOverallView();
     }
 
-    // Show success notification
-    addNotification(`School "${schoolName}" has been deleted successfully. Use Restore Deleted School to recover it.`, 'success');
-
-    // Refresh the school selector and dashboard counts
+    addNotification(`"${schoolName}" deleted. You have 15 days to restore it.`, 'success');
     await renderSchoolSelector();
     await renderOverallDashboard();
     updateRestoreButtonState();
     
   } catch (error) {
-    console.error('Error deleting school:', error);
+    console.error('Error soft-deleting school:', error);
     addNotification('Failed to delete school. Please try again.', 'error');
   }
 }
 
+// ============================================================
+// DATA RECOVERY CENTER
+// Handles three types of deleted schools:
+//   TYPE A — Soft-deleted today (v8+): school doc has status='deleted',
+//             all subcollection data still intact in Firestore.
+//             Restore = set status back to 'active'. Zero data loss.
+//   TYPE B — Old hard-deleted (v7 and earlier): school doc is gone but a
+//             full JSON backup was saved to the 'deletedSchools' Firestore
+//             collection. Restore = re-create school + all subcollections
+//             from that backup.
+//   TYPE C — Old hard-deleted with localStorage backup only: same as B
+//             but the data is stored in localStorage 'deletedSchoolBackups'.
+//             Restore = same as B but data comes from localStorage.
+// ============================================================
+
 async function restoreDeletedSchool() {
-  let backup = lastDeletedSchoolBackup;
-  if (!backup || !backup.school) {
-    const storage = getDeletedSchoolBackupStorage();
-    const ids = Object.keys(storage);
-    if (ids.length > 0) {
-      backup = storage[ids[ids.length - 1]];
+  // Close any old modal
+  document.getElementById('modal-recovery-center')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'modal-recovery-center';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML = `
+    <div class="modal" style="width:600px;max-width:96vw;max-height:90vh;overflow-y:auto;">
+      <div class="modal-header">
+        <h3>🗂 Data Recovery Center</h3>
+        <button class="modal-close" onclick="document.getElementById('modal-recovery-center').remove()">✕</button>
+      </div>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:13px;color:#1d4ed8;">
+        ℹ️ This center scans all sources — Firestore (soft-deleted &amp; backup archive) and this browser's local storage — to find every school you've ever deleted.
+      </div>
+      <div id="recovery-loading" style="text-align:center;padding:32px;color:var(--text2);">
+        <div style="font-size:32px;margin-bottom:10px;">🔍</div>
+        <div>Scanning all sources…</div>
+      </div>
+      <div id="recovery-list" style="display:none;"></div>
+    </div>`;
+  modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+
+  // Now scan all three sources in parallel
+  const now = new Date();
+  let softDeleted = [];    // TYPE A
+  let firestoreBackups = []; // TYPE B
+  let localBackups = [];    // TYPE C
+
+  // TYPE A: soft-deleted schools (status === 'deleted') still in Firestore
+  try {
+    if (currentUser) {
+      const snap = await db.collection('schools')
+        .where('ownerId', '==', currentUser.uid)
+        .where('status', '==', 'deleted')
+        .get();
+      softDeleted = snap.docs.map(d => ({ id: d.id, _type: 'A', ...d.data() }));
     }
-  }
+  } catch(e) { console.warn('Soft-delete scan failed:', e.message); }
 
-  if ((!backup || !backup.school) && currentUser) {
-    backup = await fetchLatestDeletedSchoolBackupForOwner();
-  }
+  // TYPE B: old full Firestore backups in /deletedSchools collection
+  try {
+    if (currentUser) {
+      const snap = await db.collection('deletedSchools')
+        .where('ownerId', '==', currentUser.uid)
+        .get();
+      snap.docs.forEach(d => {
+        const data = d.data();
+        // Don't duplicate a TYPE A entry
+        if (!softDeleted.find(s => s.id === (data.id || d.id))) {
+          firestoreBackups.push({ id: data.id || d.id, _type: 'B', ...data });
+        }
+      });
+    }
+  } catch(e) { console.warn('Firestore backup scan failed:', e.message); }
 
-  if (!backup || !backup.school) {
-    alert('No deleted school backup available to restore.');
+  // TYPE C: localStorage backups (old deleteSchoolBackups key AND new one)
+  try {
+    const ls1 = JSON.parse(localStorage.getItem('deletedSchoolBackups') || '{}');
+    const ls2 = JSON.parse(localStorage.getItem('fg_deleted_school_backups') || '{}');
+    const merged = { ...ls1, ...ls2 };
+    Object.values(merged).forEach(entry => {
+      const id = entry.id;
+      if (!id) return;
+      // Don't duplicate entries already found in Firestore
+      if (softDeleted.find(s => s.id === id)) return;
+      if (firestoreBackups.find(s => s.id === id)) return;
+      localBackups.push({ ...entry, _type: 'C' });
+    });
+  } catch(e) { console.warn('localStorage backup scan failed:', e.message); }
+
+  const allEntries = [...softDeleted, ...firestoreBackups, ...localBackups];
+
+  const loadingEl = document.getElementById('recovery-loading');
+  const listEl = document.getElementById('recovery-list');
+  if (!listEl || !loadingEl) return;
+  loadingEl.style.display = 'none';
+  listEl.style.display = 'block';
+
+  if (allEntries.length === 0) {
+    listEl.innerHTML = `
+      <div style="text-align:center;padding:40px;color:var(--text2);">
+        <div style="font-size:40px;margin-bottom:12px;">✅</div>
+        <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:6px;">Nothing to recover</div>
+        <div style="font-size:13px;">No deleted schools were found in Firestore or this browser's local storage.</div>
+      </div>`;
     return;
   }
 
-  try {
-    const schoolRef = db.collection('schools').doc(backup.id);
-    await schoolRef.set({
-      ...backup.school,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      restoredAt: new Date().toISOString()
-    });
+  // Store entries in a module-level registry keyed by numeric index.
+  // NEVER put Firebase IDs or school names into onclick="" strings —
+  // they contain chars that break JS attribute parsing (dots, dashes, etc.)
+  window._recoveryEntries = allEntries;
 
-    const collectionNames = Object.keys(backup.collections || {});
-    for (const collectionName of collectionNames) {
-      const docs = backup.collections[collectionName] || [];
-      for (const doc of docs) {
-        await schoolRef.collection(collectionName).doc(doc.id).set(doc.data);
+  const cards = allEntries.map((s, idx) => {
+    const name = s.name || (s.school && s.school.name) || s.id;
+    const deletedDate = s.deletedAt
+      ? new Date(s.deletedAt).toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'})
+      : '—';
+    const purgeDate = s.purgeAfter
+      ? new Date(s.purgeAfter).toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'})
+      : null;
+    const daysLeft = s.purgeAfter
+      ? Math.max(0, Math.ceil((new Date(s.purgeAfter) - now) / (1000*60*60*24)))
+      : null;
+    const isPurged = s.purgeAfter && new Date(s.purgeAfter) < now;
+
+    let typeBadge, typeDesc, actionBtn;
+    if (s._type === 'A') {
+      typeBadge = `<span style="background:#dcfce7;color:#15803d;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;">SOFT-DELETED</span>`;
+      typeDesc = `All data is <strong>fully intact</strong> in Firestore. One-click restore — zero data loss.`;
+      // Safe: only a numeric index goes into onclick
+      actionBtn = `<button class="btn btn-accent btn-sm" onclick="_recoveryAction(${idx})" style="white-space:nowrap;">🔄 Restore All Data</button>`;
+    } else if (s._type === 'B') {
+      const docCount = Object.values(s.collections || {}).reduce((t, c) => t + (c ? c.length : 0), 0);
+      typeBadge = `<span style="background:#dbeafe;color:#1d4ed8;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;">BACKUP ARCHIVE</span>`;
+      typeDesc = `Found a Firestore backup with <strong>${docCount} records</strong> across all subcollections.`;
+      actionBtn = isPurged
+        ? `<span style="font-size:12px;color:var(--danger);">Window expired</span>`
+        : `<button class="btn btn-accent btn-sm" onclick="_recoveryAction(${idx})" style="white-space:nowrap;">♻️ Restore from Backup</button>`;
+    } else {
+      const hasFullData = !!(s.school || s.collections);
+      typeBadge = `<span style="background:#fef3c7;color:#b45309;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;">LOCAL BACKUP</span>`;
+      typeDesc = hasFullData
+        ? `Found a local browser backup with school data.`
+        : `Found a lightweight reference only — subcollection data may not be available.`;
+      actionBtn = hasFullData
+        ? `<button class="btn btn-accent btn-sm" onclick="_recoveryAction(${idx})" style="white-space:nowrap;">♻️ Restore from Local</button>`
+        : `<span style="font-size:12px;color:var(--text2);">No subcollection data</span>`;
+    }
+
+    const urgencyColor = daysLeft === null ? 'var(--text2)'
+      : daysLeft <= 3 ? 'var(--danger)'
+      : daysLeft <= 7 ? 'var(--warning)'
+      : 'var(--success)';
+    const deadline = daysLeft !== null
+      ? `<div style="font-size:12px;color:${urgencyColor};margin-top:4px;">${isPurged
+          ? '❌ Recovery window expired'
+          : `⏳ ${daysLeft} day${daysLeft !== 1 ? 's' : ''} left to recover (purge: ${purgeDate})`}</div>`
+      : '';
+
+    return `
+      <div style="border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+              <div style="font-weight:700;font-size:15px;">${name}</div>
+              ${typeBadge}
+            </div>
+            <div style="font-size:12px;color:var(--text2);">Deleted: ${deletedDate}</div>
+            <div style="font-size:13px;color:var(--text);margin-top:4px;">${typeDesc}</div>
+            ${deadline}
+          </div>
+          <div style="flex-shrink:0;padding-top:4px;">${actionBtn}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  listEl.innerHTML = `
+    <div style="font-size:13px;color:var(--text2);margin-bottom:14px;">
+      Found <strong>${allEntries.length}</strong> deleted school${allEntries.length !== 1 ? 's' : ''}.
+      Soft-deleted schools restore instantly with all data. Backup restores re-create the school from a saved snapshot.
+    </div>
+    ${cards}`;
+}
+
+// Single dispatcher — reads entry from registry by index, no ID/name in HTML
+function _recoveryAction(idx) {
+  const s = window._recoveryEntries && window._recoveryEntries[idx];
+  if (!s) { alert('Entry not found. Please close and re-open the Recovery Center.'); return; }
+  const name = s.name || (s.school && s.school.name) || s.id;
+  if (s._type === 'A') {
+    doRestoreSchoolSoft(s.id, name);
+  } else {
+    doRestoreSchoolFromBackup(s.id, name, s._type);
+  }
+}
+
+// TYPE A restore — soft-delete, all Firestore data intact
+async function doRestoreSchoolSoft(schoolId, schoolName) {
+  document.getElementById('modal-recovery-center')?.remove();
+  try {
+    const schoolRef = db.collection('schools').doc(schoolId);
+    await schoolRef.set({
+      status: 'active',
+      deletedAt: firebase.firestore.FieldValue.delete(),
+      purgeAfter: firebase.firestore.FieldValue.delete(),
+      deletedBy: firebase.firestore.FieldValue.delete(),
+      restoredAt: new Date().toISOString(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Re-add to owner's userSchools index
+    if (currentUser) {
+      try {
+        await db.collection('userSchools').doc(currentUser.uid).set({
+          schoolIds: firebase.firestore.FieldValue.arrayUnion(schoolId),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch(e) { console.warn('Could not update userSchools index:', e.message); }
+    }
+
+    // Clear localStorage backup for this school
+    _clearLocalBackupEntry(schoolId);
+
+    await loadUserSchools();
+    updateRestoreButtonState();
+    await renderSchoolSelector();
+    await renderOverallDashboard();
+    addNotification(`✅ "${schoolName}" restored — all data intact.`, 'success');
+  } catch(e) {
+    console.error('Soft restore failed:', e);
+    alert('Restore failed: ' + e.message);
+  }
+}
+
+// TYPE B / C restore — hard-deleted, re-create from backup snapshot
+async function doRestoreSchoolFromBackup(schoolId, schoolName, type) {
+  document.getElementById('modal-recovery-center')?.remove();
+
+  // Load the backup data
+  let backup = null;
+  if (type === 'B') {
+    try {
+      const doc = await db.collection('deletedSchools').doc(schoolId).get();
+      if (doc.exists) backup = doc.data();
+    } catch(e) { console.warn('Could not fetch Firestore backup:', e.message); }
+  }
+  if (!backup) {
+    // Fallback: try localStorage
+    try {
+      const ls1 = JSON.parse(localStorage.getItem('deletedSchoolBackups') || '{}');
+      const ls2 = JSON.parse(localStorage.getItem('fg_deleted_school_backups') || '{}');
+      backup = ls1[schoolId] || ls2[schoolId] || null;
+    } catch(e) {}
+  }
+  if (!backup) {
+    alert('Could not load backup data. It may have been cleared from this browser.');
+    return;
+  }
+
+  // Show progress modal
+  const prog = document.createElement('div');
+  prog.id = 'modal-restore-progress';
+  prog.className = 'modal-overlay open';
+  prog.innerHTML = `
+    <div class="modal" style="width:400px;max-width:96vw;text-align:center;">
+      <div style="font-size:40px;margin-bottom:12px;">⏳</div>
+      <h3 style="font-family:'Syne';font-size:18px;margin-bottom:8px;">Restoring "${schoolName}"</h3>
+      <div id="restore-prog-msg" style="font-size:13px;color:var(--text2);margin-bottom:16px;">Creating school document…</div>
+      <div style="background:var(--surface2);border-radius:8px;height:8px;overflow:hidden;">
+        <div id="restore-prog-bar" style="height:100%;background:var(--accent);width:0%;transition:width 0.3s;border-radius:8px;"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(prog);
+
+  const setProgress = (pct, msg) => {
+    const bar = document.getElementById('restore-prog-bar');
+    const msgEl = document.getElementById('restore-prog-msg');
+    if (bar) bar.style.width = pct + '%';
+    if (msgEl) msgEl.textContent = msg;
+  };
+
+  try {
+    const schoolRef = db.collection('schools').doc(schoolId);
+
+    // Re-create the school document
+    const schoolData = backup.school || {};
+    await schoolRef.set({
+      ...schoolData,
+      status: 'active',
+      deletedAt: firebase.firestore.FieldValue.delete(),
+      purgeAfter: firebase.firestore.FieldValue.delete(),
+      restoredAt: new Date().toISOString(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+    setProgress(10, 'School created. Restoring subcollections…');
+
+    // Re-create all subcollection documents in batches
+    const collections = backup.collections || {};
+    const colNames = Object.keys(collections);
+    const totalDocs = colNames.reduce((t, c) => t + (collections[c]?.length || 0), 0);
+    let restored = 0;
+
+    for (let ci = 0; ci < colNames.length; ci++) {
+      const colName = colNames[ci];
+      const docs = collections[colName] || [];
+      setProgress(10 + Math.round((ci / colNames.length) * 80), `Restoring ${colName} (${docs.length} records)…`);
+
+      // Write in batches of 400
+      for (let i = 0; i < docs.length; i += 400) {
+        const batch = db.batch();
+        docs.slice(i, i + 400).forEach(({ id, data }) => {
+          if (id && data) batch.set(schoolRef.collection(colName).doc(id), data);
+        });
+        await batch.commit();
+        restored += Math.min(400, docs.length - i);
       }
     }
 
-    if (!userSchools.find(s => s.id === backup.id)) {
-      userSchools.push({ id: backup.id, name: backup.name, ownerId: backup.ownerId, ownerEmail: backup.ownerEmail });
+    setProgress(90, 'Updating your school index…');
+
+    // Re-add to owner's userSchools index
+    if (currentUser) {
+      try {
+        await db.collection('userSchools').doc(currentUser.uid).set({
+          schoolIds: firebase.firestore.FieldValue.arrayUnion(schoolId),
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch(e) { console.warn('Could not update userSchools index:', e.message); }
     }
 
-    lastDeletedSchoolBackup = backup;
-    saveDeletedSchoolBackupToStorage(backup);
+    // Clean up the backup archive entry (optional — keeps Firestore tidy)
+    try { await db.collection('deletedSchools').doc(schoolId).delete(); } catch(e) {}
+    _clearLocalBackupEntry(schoolId);
+
+    setProgress(100, 'Done!');
+
     await loadUserSchools();
     updateRestoreButtonState();
     await renderSchoolSelector();
     await renderOverallDashboard();
 
-    addNotification(`School "${backup.name}" restored successfully.`, 'success');
-  } catch (restoreError) {
-    console.error('Restore deleted school failed:', restoreError);
-    alert('Unable to restore the deleted school. Please check your connection and try again.');
+    setTimeout(() => {
+      prog.remove();
+      addNotification(`✅ "${schoolName}" restored with ${restored} records across ${colNames.length} collections.`, 'success');
+    }, 800);
+
+  } catch(e) {
+    prog.remove();
+    console.error('Backup restore failed:', e);
+    alert('Restore failed: ' + e.message + '\n\nSome data may have been partially restored. Please try again.');
   }
+}
+
+// Helper: clear this school from both localStorage backup keys
+function _clearLocalBackupEntry(schoolId) {
+  try {
+    ['deletedSchoolBackups', 'fg_deleted_school_backups'].forEach(key => {
+      const obj = JSON.parse(localStorage.getItem(key) || '{}');
+      if (obj[schoolId]) { delete obj[schoolId]; localStorage.setItem(key, JSON.stringify(obj)); }
+    });
+  } catch(e) {}
 }
 
 async function removeOwnerAndAllData(ownerId = currentUser?.uid, ownerEmail = currentUser?.email) {
@@ -8188,8 +8570,8 @@ function openStudentDetailModal(s) {
         <div class="form-group full"><label>Optional Note</label><input type="text" id="student-msg-note-${s.firebaseId || s.id}" placeholder="Optional note or schedule detail"></div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
-        <button class="btn btn-accent btn-sm" onclick="saveStudentFcmToken(${JSON.stringify(s.firebaseId || s.id)})">Save Token</button>
-        <button class="btn btn-primary btn-sm" onclick="sendStudentClassSchedule(${JSON.stringify(s.firebaseId || s.id)})">Send Schedule</button>
+        <button class="btn btn-accent btn-sm" onclick="saveStudentFcmToken()">Save Token</button>
+        <button class="btn btn-primary btn-sm" onclick="sendStudentClassSchedule()">Send Schedule</button>
       </div>
       <div id="student-notification-feedback-${s.firebaseId || s.id}" style="font-size:12px;color:var(--text2);margin-top:8px;"></div>
     </div>
@@ -8198,7 +8580,7 @@ function openStudentDetailModal(s) {
     <div style="margin-bottom:18px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div style="font-family:'Syne';font-size:14px;font-weight:600;">💳 Installment History</div>
-        ${balance > 0 ? `<button class="btn btn-accent btn-sm" onclick="openAddInstallmentForm('${s.id}')">+ Add Installment</button>` : '<span class="badge badge-green">✓ Fully Paid</span>'}
+        ${balance > 0 ? `<button class="btn btn-accent btn-sm" onclick="openAddInstallmentForm()">+ Add Installment</button>` : '<span class="badge badge-green">✓ Fully Paid</span>'}
       </div>
       <table class="data-table">
         <thead><tr><th>Date</th><th>Amount</th><th>Mode</th><th>Note</th></tr></thead>
@@ -8218,7 +8600,7 @@ function openStudentDetailModal(s) {
         <div class="form-group"><label>Note</label><input type="text" id="inst-note-${s.id}" placeholder="Optional note"></div>
       </div>
       <div style="display:flex;gap:10px;margin-top:12px;">
-        <button class="btn btn-success btn-sm" onclick="saveInstallment('${s.id}')">✓ Save</button>
+        <button class="btn btn-success btn-sm" onclick="saveInstallment()">✓ Save</button>
         <button class="btn btn-outline btn-sm" onclick="document.getElementById('add-inst-form-${s.id}').style.display='none'">Cancel</button>
       </div>
       <div style="font-size:12px;color:var(--text2);margin-top:8px;">Remaining balance: ₹${balance.toLocaleString()}</div>
@@ -8388,6 +8770,7 @@ async function saveStudentCredentialDetails(studentId) {
 }
 
 async function saveStudentFcmToken(studentId) {
+  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.firebaseId || _sd.id || ''; }
   const id = studentId || '';
   const fieldId = 'student-fcm-token-' + id;
   const tokenField = document.getElementById(fieldId);
@@ -8432,6 +8815,7 @@ async function saveStudentFcmToken(studentId) {
 }
 
 async function sendStudentClassSchedule(studentId) {
+  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.firebaseId || _sd.id || ''; }
   const id = studentId || '';
   const tokenField = document.getElementById('student-fcm-token-' + id);
   const titleField = document.getElementById('student-msg-title-' + id);
@@ -8520,11 +8904,13 @@ async function loadStudentAttendanceStats(firebaseId) {
 }
 
 function openAddInstallmentForm(studentId) {
+  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.firebaseId || _sd.id || ''; }
   const form = document.getElementById('add-inst-form-' + studentId);
   if (form) form.style.display = 'block';
 }
 
 async function saveInstallment(studentId) {
+  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.firebaseId || _sd.id || ''; }
   const s = data.students.find(x => x.id == studentId || x.id === studentId);
   if (!s) return;
 
@@ -11252,10 +11638,10 @@ function renderVehicles() {
           </div>
           
           <div style="display: flex; gap: 8px; justify-content: space-between;">
-            <button class="btn btn-sm btn-outline" onclick="viewVehicleDetails(${vehicle.id})" style="flex: 1;">
+            <button class="btn btn-sm btn-outline" onclick="viewVehicleDetails(${JSON.stringify(vehicle.firebaseId||vehicle.id)})" style="flex: 1;">
               📋 Details
             </button>
-            <button class="btn btn-sm btn-primary" onclick="scheduleMaintenance(${vehicle.id})" style="flex: 1;">
+            <button class="btn btn-sm btn-primary" onclick="scheduleMaintenance(${JSON.stringify(vehicle.firebaseId||vehicle.id)})" style="flex: 1;">
               🔧 Service
             </button>
           </div>
@@ -11370,10 +11756,11 @@ async function saveNewVehicle() {
         ...vehicleData,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      vehicleData.id = data.vehicles.length + 1;
+      vehicleData.id = docRef.id;
       vehicleData.firebaseId = docRef.id;
+      FGCache.invalidate(currentSchoolId, 'vehicles');
     } else {
-      vehicleData.id = data.vehicles.length + 1;
+      vehicleData.id = 'local_' + Date.now();
     }
     data.vehicles.push(vehicleData);
     closeModal('modal-add-vehicle');
@@ -11415,6 +11802,23 @@ function scheduleMaintenance(vehicleId) {
 // ============================================================
 // NOTIFICATIONS
 // ============================================================
+// Universal Firestore value → JS Date converter.
+// Handles: Firestore Timestamp, JS Date, ISO string, Unix ms number, null/undefined.
+function _toJsDate(val) {
+  if (!val) return null;
+  // Firestore Timestamp has .toDate()
+  if (typeof val.toDate === 'function') return val.toDate();
+  // Firestore Timestamp serialised as { seconds, nanoseconds }
+  if (typeof val === 'object' && typeof val.seconds === 'number') {
+    return new Date(val.seconds * 1000);
+  }
+  // JS Date passthrough
+  if (val instanceof Date) return val;
+  // ISO string or Unix ms
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function renderNotifications() {
   const list = document.getElementById('notif-list');
   if(!list) return;
@@ -11426,10 +11830,12 @@ function renderNotifications() {
   list.innerHTML = data.notifications.map(function(n) {
     let displayTime = n.time;
     if (displayTime === 'Just now' && n.createdAt) {
-      const date = typeof n.createdAt === 'string' ? new Date(n.createdAt) : n.createdAt.toDate();
-      const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const dateStr = date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
-      displayTime = timeStr + ' • ' + dateStr;
+      const date = _toJsDate(n.createdAt);
+      if (date) {
+        const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
+        displayTime = timeStr + ' • ' + dateStr;
+      }
     }
     const badge = !n.read ? '<span class="badge badge-blue" style="font-size:10px;">New</span>' : '';
     const icon = n.type==='success'?'✅':n.type==='warning'?'⚠️':n.type==='alert'?'🔔':'ℹ️';
@@ -11738,8 +12144,18 @@ function ensureAgentRegistered(agentName) {
     return ((agent && (agent.name || agent.agentName || '')) || '').trim().toLowerCase() === name.toLowerCase();
   });
   if (!already) {
-    data.agents.push({ name: name, createdAt: new Date().toISOString(), schoolId: currentSchoolId || '' });
+    const agentDoc = { name: name, createdAt: new Date().toISOString(), schoolId: currentSchoolId || '' };
+    data.agents.push(agentDoc);
     saveAgentsToLocalStorage(currentSchoolId || 'global');
+    // Also persist to Firestore so agents survive across devices/browsers
+    if (currentSchoolId && typeof db !== 'undefined') {
+      db.collection('schools').doc(currentSchoolId).collection('agents').add(agentDoc)
+        .then(function(ref) {
+          agentDoc.firebaseId = ref.id;
+          FGCache.invalidate(currentSchoolId, 'agents');
+        })
+        .catch(function(e) { console.warn('Could not save agent to Firestore:', e.message); });
+    }
   }
   updateAgentDatalist();
 }
@@ -12276,7 +12692,7 @@ function openEditStudentModal(s) {
       </div>
     </div>
     <div style="margin-top:20px;display:flex;gap:10px;border-top:1px solid var(--border);padding-top:16px;">
-      <button class="btn btn-accent" onclick="saveEditStudent('${s.firebaseId||s.id}')" style="flex:1;">✓ Save Changes</button>
+      <button class="btn btn-accent" onclick="saveEditStudent(${JSON.stringify(s.firebaseId||s.id)})" style="flex:1;">✓ Save Changes</button>
       <button class="btn btn-outline" onclick="document.getElementById('modal-edit-student').remove()">Cancel</button>
     </div>
   </div>`;
@@ -12788,8 +13204,8 @@ function renderFormsRegistry(formType) {
     : allForms.map(function(f, idx) {
         const fid = f.firebaseId || f.id || '';
         const printButton = '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\', \'' + ftCode + '\')">🖨️ Print</button>';
-        const editButton = `<button class="btn btn-outline btn-sm" onclick="editFormRecord('${fid}')">✏️</button>`;
-        const deleteButton = currentRole==='owner' ? `<button class="btn btn-danger btn-sm" onclick="deleteFormRecord('${fid}')">🗑</button>` : '';
+        const editButton = `<button class="btn btn-outline btn-sm" onclick="editFormRecord(${JSON.stringify(fid)})">✏️</button>`;
+        const deleteButton = currentRole==='owner' ? `<button class="btn btn-danger btn-sm" onclick="deleteFormRecord(${JSON.stringify(fid)})">🗑</button>` : '';
         const actionBtns = canEdit
           ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${printButton}${editButton}${deleteButton}</div>`
           : printButton;
@@ -13986,7 +14402,7 @@ function viewOtherService(id) {
     <div style="margin-bottom:16px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div style="font-family:'Syne';font-size:14px;font-weight:600;">💳 Payment History</div>
-        ${bal>0?`<button class="btn btn-accent btn-sm" onclick="openAddServiceInstallment('${svc.id||svc.firebaseId}')">+ Add Payment</button>`:'<span class="badge badge-green">✓ Fully Paid</span>'}
+        ${bal>0?`<button class="btn btn-accent btn-sm" onclick="openAddServiceInstallment(${JSON.stringify(svc.id||svc.firebaseId)})">+ Add Payment</button>`:'<span class="badge badge-green">✓ Fully Paid</span>'}
       </div>
       <table class="data-table">
         <thead><tr><th>Date</th><th>Amount</th><th>Mode</th><th>Note</th></tr></thead>
@@ -14006,14 +14422,14 @@ function viewOtherService(id) {
         <div class="form-group"><label>Note</label><input type="text" id="si-note-${svc.id}" placeholder="Optional"></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;">
-        <button class="btn btn-success btn-sm" onclick="saveServiceInstallment('${svc.id}')">Save</button>
+        <button class="btn btn-success btn-sm" onclick="saveServiceInstallment(${JSON.stringify(svc.id)})">Save</button>
         <button class="btn btn-outline btn-sm" onclick="document.getElementById('service-install-form-${svc.id}').style.display='none'">Cancel</button>
       </div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap;">
-      ${currentRole==='owner' ? `<button class="btn btn-accent" onclick="openEditOtherService('${svc.id||svc.firebaseId}');document.getElementById('modal-view-other-service').remove()">✏️ Edit</button>` : ''}
-      <button class="btn btn-outline" onclick="printForm15ForService('${svc.id||svc.firebaseId}')">🖨️ Form 15</button>
-      <button class="btn btn-primary" onclick="generateServiceInvoice('${svc.id}')">🧾 Invoice</button>
+      ${currentRole==='owner' ? `<button class="btn btn-accent" onclick="openEditOtherService(${JSON.stringify(svc.id||svc.firebaseId)});document.getElementById('modal-view-other-service').remove()">✏️ Edit</button>` : ''}
+      <button class="btn btn-outline" onclick="printForm15ForService(${JSON.stringify(svc.id||svc.firebaseId)})">🖨️ Form 15</button>
+      <button class="btn btn-primary" onclick="generateServiceInvoice(${JSON.stringify(svc.id)})">🧾 Invoice</button>
       <button class="btn btn-outline" onclick="document.getElementById('modal-view-other-service').remove()">Close</button>
     </div>
   </div>`;
@@ -15305,8 +15721,8 @@ function renderStaffTable() {
       <td style="color:var(--text2);font-size:12px;">${s.joinedOn || s.createdAt || 'Unknown'}</td>
       <td>
         <div style="display:flex;gap:5px;">
-          <button class="btn btn-outline btn-sm" onclick="editStaff('${s.id || 'unknown'}')" data-action="edit_staff">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="removeStaff('${s.id || 'unknown'}')" data-action="delete_staff">Remove</button>
+          <button class="btn btn-outline btn-sm" onclick="editStaff(${JSON.stringify(s.id||'unknown')})" data-action="edit_staff">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="removeStaff(${JSON.stringify(s.id||'unknown')})" data-action="delete_staff">Remove</button>
         </div>
       </td>
     </tr>
@@ -16998,7 +17414,7 @@ function populateFormFromStudentId(value) {
         <select id="veh-type">
           <option value="2-Wheeler">2-Wheeler</option>
           <option value="4-Wheeler (LMV)" selected>4-Wheeler (LMV)</option>
-          <option value="Heavy Vehicle">Heavy Vehicle</option> 
+          <option value="Heavy Vehicle">Heavy Vehicle</option>
         </select>
       </div>
       <div class="form-group"><label>Status</label>
