@@ -868,7 +868,7 @@
             </div>
           </div>
           <table class="data-table">
-            <thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Type</th><th>Amount</th></tr></thead>
+            <thead><tr><th>Date</th><th>Category</th><th>Description</th><th>Type</th><th>Amount</th><th>Action</th></tr></thead>
             <tbody id="cf-table"></tbody>
           </table>
         </div>
@@ -4429,6 +4429,10 @@ const FirebaseService = {
     return this.addDocument(this.transactionsRef, transactionData);
   },
 
+  async deleteTransaction(transactionId) {
+    return this.deleteDocument(this.transactionsRef, transactionId);
+  },
+
   async getTransactions(monthFilter = null) {
     const cacheKey = monthFilter ? ('transactions:' + monthFilter) : 'transactions';
     if (currentSchoolId) {
@@ -5725,7 +5729,7 @@ function hasActionPermission(action, data = {}) {
       return currentRole === 'owner' || currentRole === 'office';
     
     case 'delete_transaction':
-      return currentRole === 'owner' || currentRole === 'office';
+      return currentRole === 'owner';
     
     case 'mark_attendance':
       // ALL users require location verification for attendance marking
@@ -8175,7 +8179,7 @@ function renderStudentsTable(filter='', statusFilter='') {
           '<button class="btn btn-outline btn-sm" onclick="viewStudent(\'' + sid + '\')">View</button>' +
           (currentRole==='owner' ? '<button class="btn btn-primary btn-sm" onclick="editStudent(\'' + sid + '\')">Edit</button>' : '') +
           '<button class="btn btn-success btn-sm" onclick="generateStudentInvoice(\'' + sid + '\')" title="Invoice">&#x1F9FE;</button>' +
-          ((currentRole==='owner'||currentRole==='office') ? '<button class="btn btn-danger btn-sm" onclick="confirmDeleteStudent(\'' + sid + '\')" title="Delete">&#x1F5D1;</button>' : '') +
+          (currentRole==='owner' ? '<button class="btn btn-danger btn-sm" onclick="confirmDeleteStudent(\'' + sid + '\')" title="Delete">&#x1F5D1;</button>' : '') +
         '</div>' +
       '</td>' +
     '</tr>';
@@ -8295,7 +8299,7 @@ async function addStudentFromModal() {
       paid: amountPaid,
       installments: amountPaid > 0 ? [{ date: new Date().toISOString().split('T')[0], amount: amountPaid, mode: paymentMode, note: 'Initial payment' }] : [],
       status: document.getElementById('qs-status').value,
-      enrolled: new Date().toISOString().split('T')[0],
+      enrolled: document.getElementById('qs-enrolled').value || new Date().toISOString().split('T')[0],
       dob: document.getElementById('qs-dob').value || '',
       address: document.getElementById('qs-address').value || '',
       email: document.getElementById('qs-email').value || '',
@@ -9052,6 +9056,11 @@ async function renderCashflow() {
     } else {
       tb.innerHTML = transactions.map(t => {
         const amt = t.amount || 0;
+        const txId = String(t.id || t.firebaseId || '');
+        const safeTxId = txId.replace(/'/g, "\\'");
+        const actionCell = currentRole === 'owner'
+          ? '<button class="btn btn-danger btn-sm" onclick="confirmDeleteTransaction(\'' + safeTxId + '\')">Delete</button>'
+          : '';
         return '<tr>' +
           '<td style="color:var(--text2);font-size:12px;">' + (t.date||'—') + '</td>' +
           '<td><span class="badge badge-gray">' + (t.category||'Other') + '</span></td>' +
@@ -9060,12 +9069,65 @@ async function renderCashflow() {
           '<td style="font-weight:600;color:' + (t.type==='income'?'var(--success)':'var(--danger)') + '">' +
             (t.type==='income'?'+':'-') + '&#x20B9;' + amt.toLocaleString() +
           '</td>' +
+          '<td>' + actionCell + '</td>' +
         '</tr>';
       }).join('');
     }
   }
   } catch (error) {
     console.error('Error rendering cashflow:', error);
+  }
+}
+
+function confirmDeleteTransaction(id) {
+  if (currentRole !== 'owner') {
+    showToast('⚠ Only owners can delete cashflow entries');
+    return;
+  }
+  const tx = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===String(id); });
+  if (!tx) { showToast('Transaction not found'); return; }
+  const old = document.getElementById('modal-confirm-delete-transaction');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-confirm-delete-transaction';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML =
+    '<div class="modal" style="width:440px;max-width:96vw;">' +
+      '<div class="modal-header">' +
+        '<h3 style="color:var(--danger);">⚠ Delete Transaction</h3>' +
+        '<button class="modal-close" onclick="document.getElementById(\'modal-confirm-delete-transaction\').remove()">✕</button>' +
+      '</div>' +
+      '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px;margin-bottom:20px;">' +
+        '<div style="font-weight:600;font-size:15px;margin-bottom:6px;">' + (tx.category||'Transaction') + '</div>' +
+        '<div style="font-size:13px;color:var(--text2);">' + (tx.desc||'No description') + '</div>' +
+      '</div>' +
+      '<p style="font-size:14px;color:var(--text);margin-bottom:16px;">This will permanently remove the transaction entry. <strong>This cannot be undone.</strong></p>' +
+      '<div style="display:flex;gap:10px;">' +
+        '<button class="btn btn-danger" onclick="deleteTransaction(' + JSON.stringify(String(id)) + ')" style="flex:1;">🗑 Yes, Delete</button>' +
+        '<button class="btn btn-outline" onclick="document.getElementById(\'modal-confirm-delete-transaction\').remove()" style="flex:1;">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function deleteTransaction(id) {
+  if (currentRole !== 'owner') {
+    showToast('⚠ Only owners can delete cashflow entries');
+    return;
+  }
+  const txId = String(id);
+  try {
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      await FirebaseService.deleteTransaction(txId);
+    }
+    data.transactions = (data.transactions||[]).filter(function(t){ return String(t.id||t.firebaseId) !== txId; });
+    document.getElementById('modal-confirm-delete-transaction')?.remove();
+    renderCashflow();
+    showToast('🗑 Transaction deleted successfully');
+  } catch(e) {
+    console.error('Delete transaction error:', e);
+    alert('Error deleting transaction: ' + (e.message||'Please try again.'));
   }
 }
 
@@ -12176,7 +12238,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ============================================================
-// DELETE STUDENT (owner + office)
+// DELETE STUDENT (owner only)
 // ============================================================
 function confirmDeleteStudent(id) {
   const s = data.students.find(function(x){ return String(x.firebaseId||x.id)===String(id); });
@@ -12208,8 +12270,8 @@ function confirmDeleteStudent(id) {
 }
 
 async function deleteStudent(id) {
-  if (currentRole !== 'owner' && currentRole !== 'office') {
-    showToast('⚠ Only owners and office admins can delete students'); return;
+  if (currentRole !== 'owner') {
+    showToast('⚠ Only owners can delete students'); return;
   }
   const sid = String(id);
   try {
@@ -12738,9 +12800,10 @@ async function saveEditStudent(studentId) {
   if (traineeSigClear) { updates.traineeSignatureUrl = ''; }
   else if (traineeFile) { updates.traineeSignatureUrl = await readFileAsDataURL(traineeFile); }
   try {
-    if (currentSchoolId && typeof db !== 'undefined') {
-      await db.collection('schools').doc(currentSchoolId).collection('students').doc(String(studentId)).update(updates);
+    if (!currentSchoolId || typeof db === 'undefined') {
+      throw new Error('No active school selected or database not available.');
     }
+    await FirebaseService.updateStudent(String(studentId), updates);
     const local = data.students.find(x => String(x.firebaseId)===String(studentId)||String(x.id)===String(studentId));
     if (local) Object.assign(local, updates);
     document.getElementById('modal-edit-student').remove();
@@ -12748,7 +12811,7 @@ async function saveEditStudent(studentId) {
     showToast('✅ Student updated!');
   } catch(e) {
     console.error('Edit student error:', e);
-    alert('Error saving. Please try again.');
+    alert('Error saving. Please try again. ' + (e.message || ''));
   }
 }
 
@@ -12993,7 +13056,7 @@ function openStudentDetailModalWithButtons(s) {
       if (currentRole === 'owner') {
         btns += '<button class="btn btn-primary invoice-btn" onclick="editStudent(\'' + sid + '\');document.getElementById(\'modal-student-detail\').remove()">&#x270F;&#xFE0F; Edit</button>';
       }
-      if (currentRole === 'owner' || currentRole === 'office') {
+      if (currentRole === 'owner') {
         btns += '<button class="btn btn-danger invoice-btn" onclick="confirmDeleteStudent(\'' + sid + '\')">&#x1F5D1; Delete</button>';
       }
       footer.insertAdjacentHTML('afterbegin', btns);
@@ -13841,7 +13904,7 @@ async function openEditOtherService(id) {
   openAddOtherServiceModal();
 
   // Wait a tick for modal DOM to render
-  await new Promise(function(r){ setTimeout(r, 80); });
+  await new Promise(function(r){ setTimeout(r, 120); });
 
   // Pre-fill all fields
   const set = function(elId, val) { const el = document.getElementById(elId); if(el) el.value = val||''; };
@@ -13850,10 +13913,11 @@ async function openEditOtherService(id) {
   set('os-client-address', svc.clientAddress);
   set('os-vehicle-number', svc.vehicleNumber);
   set('os-aadhaar',        svc.aadhaar);
-  set('os-service-type',   svc.serviceType);
+  set('os-service-category', svc.serviceCategory || 'DL');
+  renderOsServiceOptions();
   set('os-description',    svc.description);
-  set('os-total-fee',      svc.totalAmount);
-  set('os-amount-paid',    svc.amountPaid);
+  set('os-total-amount',   svc.totalAmount);
+  set('os-initial-payment',svc.amountPaid);
   set('os-payment-mode',   svc.paymentMode);
   set('os-date',           svc.date);
   set('os-expected-date',  svc.expectedDate);
@@ -13863,11 +13927,24 @@ async function openEditOtherService(id) {
   set('os-form14-date',    svc.form14Date);
   set('os-form-remarks',   svc.formRemarks);
 
+  const serviceTypes = (svc.serviceType||'').split(' + ').map(function(v){ return v.trim(); }).filter(Boolean);
+  document.querySelectorAll('input[name="os-service-type-cb"]').forEach(function(cb) {
+    cb.checked = serviceTypes.includes(cb.value);
+  });
+  updateOsServicesList();
+  if (Array.isArray(svc.serviceBreakdown)) {
+    svc.serviceBreakdown.forEach(function(item) {
+      const key = _os_sanitize_id(item.name);
+      const el = document.getElementById('os-svc-amt-' + key);
+      if (el) el.value = item.amount || 0;
+    });
+  }
+
   // Change modal title and save button to reflect edit mode
   const modalTitle = document.querySelector('#modal-add-other-service .modal-header h3');
   if (modalTitle) modalTitle.textContent = '✏️ Edit Service Record';
 
-  const saveBtn = document.querySelector('#modal-add-other-service .btn-primary');
+  const saveBtn = document.querySelector('#modal-add-other-service .btn-accent');
   if (saveBtn) {
     saveBtn.textContent = '💾 Save Changes';
     saveBtn.onclick = async function() {
@@ -13882,19 +13959,28 @@ async function updateOtherService(id) {
   const clientAddr  = (document.getElementById('os-client-address')?.value||'').trim();
   if (!clientName || !clientPhone) { alert('Please enter client name and phone.'); return; }
 
+  const selectedServiceTypes = Array.from(document.querySelectorAll('input[name="os-service-type-cb"]:checked')).map(function(i){ return i.value; });
+  const serviceTypeVal = selectedServiceTypes.join(' + ');
+  const serviceBreakdown = selectedServiceTypes.map(function(v){
+    const key = _os_sanitize_id(v);
+    return { name: v, amount: parseFloat(document.getElementById('os-svc-amt-' + key)?.value||'0') };
+  });
+
   const updated = {
     clientName,
     clientPhone,
     clientAddress:  clientAddr,
     vehicleNumber:  (document.getElementById('os-vehicle-number')?.value||'').trim().toUpperCase(),
     aadhaar:        (document.getElementById('os-aadhaar')?.value||'').trim(),
-    serviceType:    document.getElementById('os-service-type')?.value||'',
+    serviceType:    serviceTypeVal,
+    serviceBreakdown: serviceBreakdown,
     description:    document.getElementById('os-description')?.value||'',
-    totalAmount:    parseFloat(document.getElementById('os-total-fee')?.value||'0'),
-    amountPaid:     parseFloat(document.getElementById('os-amount-paid')?.value||'0'),
+    totalAmount:    parseFloat(document.getElementById('os-total-amount')?.value||'0'),
+    amountPaid:     parseFloat(document.getElementById('os-initial-payment')?.value||'0'),
     paymentMode:    document.getElementById('os-payment-mode')?.value||'Cash',
     date:           document.getElementById('os-date')?.value||'',
     expectedDate:   document.getElementById('os-expected-date')?.value||'',
+    serviceCategory:document.getElementById('os-service-category')?.value||'DL',
     form5Status:    document.getElementById('os-form5-status')?.value||'',
     form5Date:      document.getElementById('os-form5-date')?.value||'',
     form14Status:   document.getElementById('os-form14-status')?.value||'',
@@ -13904,7 +13990,11 @@ async function updateOtherService(id) {
   };
 
   try {
-    await db.collection('otherServices').doc(id).update(updated);
+    if (currentSchoolId && typeof db !== 'undefined') {
+      await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(id).update(updated);
+    } else {
+      await db.collection('otherServices').doc(id).update(updated);
+    }
     const idx = (data.otherServices||[]).findIndex(function(s){ return (s.firebaseId||s.id)===id; });
     if (idx >= 0) data.otherServices[idx] = Object.assign({}, data.otherServices[idx], updated);
     document.getElementById('modal-add-other-service')?.remove();
