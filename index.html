@@ -415,6 +415,17 @@
 </head>
 <body>
 
+<!-- Offline Status Indicator -->
+<div data-status="offline-indicator" style="
+  display: none;
+  position: fixed; top: 0; left: 0; right: 0;
+  background: #dc2626; color: white;
+  padding: 12px 20px; z-index: 10000;
+  font-size: 14px; font-weight: 500;
+  align-items: center; justify-content: center;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+">🔌 Offline - Changes will sync when online</div>
+
 <!-- SPLASH / LOGIN -->
 <div id="splash">
   <div class="splash-card">
@@ -2884,69 +2895,18 @@
           }
         });
 
-        // Save to Firebase with batch + individual fallback
+        // Save to Firebase via DataWriter (queue each record for immediate write or offline sync)
         let firebaseSuccess = false;
         if (typeof db !== 'undefined' && currentSchoolId) {
           try {
-            const batch = db.batch();
-            records.forEach(rec => {
-              const docId = today + '_' + (rec.studentId || rec.studentName.replace(/\s/g,'_'));
-              const ref = db.collection('schools').doc(currentSchoolId).collection('studentAttendance').doc(docId);
-              batch.set(ref, rec);
-            });
-            
-            // Update class counts for ALL students in records, not just those in data.students
-            const studentsToUpdate = new Map();
-            
-            // First, collect all students from data.students array
-            data.students.forEach(s => {
-              if (records.some(r => r.studentId === (s.firebaseId || s.id) && (r.status === 'present' || r.status === 'late'))) {
-                studentsToUpdate.set(String(s.firebaseId || s.id), {
-                  classes: s.classes,
-                  status: s.status
-                });
-              }
-            });
-            
-            // Then process records to update Firestore for each student with a class
-            const uniqueStudents = new Set();
-            records.forEach(rec => {
-              if ((rec.status === 'present' || rec.status === 'late') && rec.studentId) {
-                const studentId = String(rec.studentId);
-                if (!uniqueStudents.has(studentId)) {
-                  uniqueStudents.add(studentId);
-                  const student = studentsToUpdate.get(studentId);
-                  const ref = db.collection('schools').doc(currentSchoolId).collection('students').doc(studentId);
-                  
-                  if (student) {
-                    // Student exists in data.students, update with exact count
-                    batch.update(ref, {
-                      classes: (student.classes || 0),
-                      status: student.status
-                    });
-                  } else {
-                    // Student NOT in data.students - use atomic increment
-                    // This handles students from other contexts safely
-                    batch.update(ref, {
-                      classes: firebase.firestore.FieldValue.increment(1)
-                    });
-                  }
-                }
-              }
-            });
-            
-            await batch.commit();
-            firebaseSuccess = true;
-          } catch(e) {
-            console.error('Batch save failed, retrying individually:', e.message);
+            // Queue attendance records
             for (const rec of records) {
-              try {
-                const docId = today + '_' + (rec.studentId || rec.studentName.replace(/\s/g,'_'));
-                await db.collection('schools').doc(currentSchoolId).collection('studentAttendance').doc(docId).set(rec);
-                firebaseSuccess = true;
-              } catch(e2) { console.error('Individual save failed:', rec.studentName, e2.message); }
+              const docId = today + '_' + (rec.studentId || rec.studentName.replace(/\s/g,'_'));
+              const success = await DataWriter.queueWrite('set', 'schools/' + currentSchoolId + '/studentAttendance', docId, rec);
+              if (success) firebaseSuccess = true;
             }
-            // Update class counts for all students from records (fallback path)
+
+            // Update class counts for students represented in records
             const processedStudents = new Set();
             for (const rec of records) {
               if ((rec.status === 'present' || rec.status === 'late') && rec.studentId) {
@@ -2956,20 +2916,22 @@
                   try {
                     const student = data.students.find(s => String(s.firebaseId || s.id) === studentId);
                     if (student) {
-                      // Student in data.students, update with exact count
                       const updateData = { classes: (student.classes || 0) };
                       if (student.status === 'Completed') updateData.status = 'Completed';
-                      await db.collection('schools').doc(currentSchoolId).collection('students').doc(studentId).update(updateData);
+                      const ok = await DataWriter.queueWrite('update', 'schools/' + currentSchoolId + '/students', studentId, updateData);
+                      if (ok) firebaseSuccess = true;
                     } else {
-                      // Student NOT in data.students - use atomic increment
-                      await db.collection('schools').doc(currentSchoolId).collection('students').doc(studentId).update({
+                      const ok = await DataWriter.queueWrite('update', 'schools/' + currentSchoolId + '/students', studentId, {
                         classes: firebase.firestore.FieldValue.increment(1)
                       });
+                      if (ok) firebaseSuccess = true;
                     }
-                  } catch(e2) { console.error('Class update failed for student:', studentId, e2.message); }
+                  } catch(e2) { console.error('Class update queue failed for student:', studentId, e2.message); }
                 }
               }
             }
+          } catch(e) {
+            console.warn('Attendance save failed to queue:', e.message);
           }
         } else {
           console.warn('Firebase not available — saved locally only');
@@ -3183,17 +3145,31 @@
           };
 
           if (typeof db !== 'undefined' && typeof currentSchoolId !== 'undefined' && currentSchoolId) {
-            await db.collection('schools').doc(currentSchoolId).collection('fuel').add({
+            // Queue fuel entry write with cache invalidation
+            const fuelSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/fuel', null, {
               ...fuelEntry,
               createdAt: firebase.firestore.FieldValue.serverTimestamp()
             });
-            // Also add as expense transaction for cashflow
-            await db.collection('schools').doc(currentSchoolId).collection('transactions').add({
+            
+            // Queue transaction write with cache invalidation
+            await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/transactions', null, {
               date, type: 'expense', category: 'Petrol',
               desc: 'Fuel — ' + (vehicle||'Vehicle') + ' by ' + fuelEntry.instructorName,
               amount: parseFloat(cost), schoolId: currentSchoolId,
               createdAt: firebase.firestore.FieldValue.serverTimestamp()
             });
+            
+            // Invalidate caches
+            FGCache.invalidate(currentSchoolId, 'fuel');
+            FGCache.invalidate(currentSchoolId, 'transactions');
+            EnhancedCache.del(currentSchoolId, 'fuel').catch(e => {});
+            EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+            
+            if (fuelSuccess) {
+              showNotification('✅ Fuel entry synced to Firebase', 'success');
+            } else {
+              showNotification('⏳ Fuel entry queued - will sync when online', 'info');
+            }
           } else {
             if (typeof data !== 'undefined') {
               data.fuel = data.fuel || [];
@@ -3525,27 +3501,50 @@ async function updateClasses(studentKey) {
   }
   try {
     const studentsCollection = db.collection('schools').doc(currentSchoolId).collection('students');
-    let docRef = studentsCollection.doc(String(studentKey));
-    let doc = await docRef.get();
 
-    if (!doc.exists) {
-      const queryByStudentId = await studentsCollection.where('studentId', '==', String(studentKey)).limit(1).get();
-      if (!queryByStudentId.empty) {
-        doc = queryByStudentId.docs[0];
-      }
+    // Try local in-memory data first (fast, zero reads)
+    let local = (data.students||[]).find(s => String(s.id) === String(studentKey) || String(s.firebaseId) === String(studentKey) || String(s.studentId) === String(studentKey));
+    let docId = null;
+    let student = null;
+
+    if (local) {
+      docId = local.firebaseId || local.id;
+      student = Object.assign({}, local);
+    } else {
+      // Try cached students via FirebaseService (uses FGCache)
+      try {
+        const studentsCached = await FirebaseService.getStudents();
+        const found = (studentsCached||[]).find(s => String(s.id) === String(studentKey) || String(s.firebaseId) === String(studentKey) || String(s.studentId) === String(studentKey));
+        if (found) {
+          docId = found.id || found.firebaseId;
+          student = Object.assign({}, found);
+        }
+      } catch(e) { /* ignore and fallback to direct reads */ }
     }
-    if (!doc.exists) {
-      const queryByFirebaseId = await studentsCollection.where('firebaseId', '==', String(studentKey)).limit(1).get();
-      if (!queryByFirebaseId.empty) {
-        doc = queryByFirebaseId.docs[0];
-      }
+
+    // Last resort: direct Firestore queries (used rarely)
+    if (!docId) {
+      try {
+        let doc = await studentsCollection.doc(String(studentKey)).get();
+        if (!doc.exists) {
+          const queryByStudentId = await studentsCollection.where('studentId', '==', String(studentKey)).limit(1).get();
+          if (!queryByStudentId.empty) doc = queryByStudentId.docs[0];
+        }
+        if (!doc.exists) {
+          const queryByFirebaseId = await studentsCollection.where('firebaseId', '==', String(studentKey)).limit(1).get();
+          if (!queryByFirebaseId.empty) doc = queryByFirebaseId.docs[0];
+        }
+        if (doc && doc.exists) {
+          docId = doc.id;
+          student = Object.assign({}, doc.data(), { firebaseId: doc.id });
+        }
+      } catch(e) { console.warn('Direct student lookup failed:', e.message); }
     }
-    if (!doc.exists) {
+
+    if (!docId || !student) {
       showToast('⚠ Student not found in database');
       return;
     }
-
-    const student = { ...doc.data(), firebaseId: doc.id };
     const maxClasses = student.totalClasses || 27;
     if ((student.classes || 0) >= maxClasses) {
       showToast('✅ ' + student.name + ' has completed all ' + maxClasses + ' classes!');
@@ -3556,13 +3555,13 @@ async function updateClasses(studentKey) {
     const nowComplete = newClasses >= maxClasses;
     if (nowComplete) updateData.status = 'Completed';
 
-    await studentsCollection.doc(doc.id).update(updateData);
+    await studentsCollection.doc(docId).update(updateData);
 
-    // Update local data
-    const local = data.students.find(s => (s.firebaseId || s.id) === doc.id || String(s.studentId) === String(studentKey));
-    if (local) {
-      local.classes = newClasses;
-      if (nowComplete) local.status = 'Completed';
+    // Update local data (if present)
+    const localIdx = (data.students||[]).findIndex(s => (s.firebaseId || s.id) === docId || String(s.studentId) === String(studentKey));
+    if (localIdx >= 0) {
+      data.students[localIdx].classes = newClasses;
+      if (nowComplete) data.students[localIdx].status = 'Completed';
     }
 
     if (nowComplete) {
@@ -3646,7 +3645,8 @@ function saveDeletedSchoolBackupToStorage(backup) {
 async function saveDeletedSchoolBackupToFirestore(backup) {
   if (typeof db === 'undefined' || db === null) return;
   try {
-    await db.collection('deletedSchools').doc(backup.id).set(backup);
+    await DataWriter.queueWrite('set', 'deletedSchools', backup.id, backup);
+    EnhancedCache.del(backup.id, 'deletedSchools').catch(e => {});
   } catch (error) {
     console.warn('Could not save deleted school backup to Firestore:', error.message || error);
   }
@@ -3923,11 +3923,16 @@ function initEmailJS() {
 
 // Flag: true while doLogin() is actively running — prevents onAuthStateChanged from firing twice
 let _manualLoginInProgress = false;
+// FIX 4: Cache getUserMemberSchools result during login to avoid 3x duplicate reads
+let _loginTimeMemberSchools = null;
 
 document.addEventListener('DOMContentLoaded', function() {
   const ok = initFirebase();
   initEmailJS();
   registerFirebaseMessagingServiceWorker();
+  SyncQueue.init().catch(e => console.warn('SyncQueue init failed:', e));
+  EnhancedCache.init().catch(e => console.warn('EnhancedCache init failed:', e));
+  SyncManager.initialize().catch(e => console.warn('SyncManager init failed:', e));
   if (!ok || !auth) return;
 
   // Auto-restore session on page refresh using Firebase LOCAL persistence
@@ -3960,12 +3965,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Restore data and show app — skip verifyUserRole to avoid Firestore delay on refresh
       if (currentRole === 'owner') {
-        await loadUserSchools();
-        if (currentSchoolId) {
+        if (savedSchoolId) {
+          // FIX 3: We already know the school from localStorage — skip the loadUserSchools query
+          // and populate the dropdown lazily after the app loads to save ~N reads on every refresh
+          currentSchoolId = savedSchoolId;
+          FirebaseService.setSchool(savedSchoolId);
+          // Lazy-load school list for the school switcher (non-blocking)
+          setTimeout(() => loadUserSchools(), 2000);
           await loadInitialData();
           setupRealtimeListeners();
           await continueToApp();
         } else {
+          await loadUserSchools();
           await continueToAppDirectly();
         }
       } else {
@@ -4131,14 +4142,41 @@ function getAttendanceDocId(date, role, user) {
 
 async function loadSelfAttendanceRecords(limitDays = 30) {
   if (typeof db === 'undefined' || !currentSchoolId || !currentUser) return [];
-  const records = [];
-  for (let i = 0; i < limitDays; i++) {
-    const date = new Date(Date.now() - i * 86400000).toISOString().split('T')[0];
-    const docId = getAttendanceDocId(date, currentRole, currentUser);
-    const doc = await db.collection('schools').doc(currentSchoolId).collection('attendance').doc(docId).get();
-    if (doc.exists) records.push(doc.data());
+  const uid = currentUser.uid;
+
+  // Session cache — busted when attendance is marked via syncSelfAttendanceToRoleCollection
+  const cacheKey = 'selfAttRecords:' + uid;
+  const cached = FGCache.get(currentSchoolId, cacheKey);
+  if (cached) return cached;
+
+  const fromDate = new Date(Date.now() - limitDays * 86400000).toISOString().split('T')[0];
+  try {
+    // Single query instead of 30 individual doc reads — 1 read (or N matched docs) vs 30
+    const snap = await db.collection('schools').doc(currentSchoolId).collection('attendance')
+      .where('userId', '==', uid)
+      .where('date', '>=', fromDate)
+      .orderBy('date', 'desc')
+      .get();
+    const result = snap.docs.map(d => d.data());
+    FGCache.set(currentSchoolId, cacheKey, result, FGCache.TTL_SHORT);
+    return result;
+  } catch (e) {
+    // Fallback: index may not be deployed yet — query without date filter
+    console.warn('loadSelfAttendanceRecords composite query failed, trying simpler query:', e.message);
+    try {
+      const snap = await db.collection('schools').doc(currentSchoolId).collection('attendance')
+        .where('userId', '==', uid)
+        .orderBy('date', 'desc')
+        .limit(limitDays)
+        .get();
+      const result = snap.docs.map(d => d.data());
+      FGCache.set(currentSchoolId, cacheKey, result, FGCache.TTL_SHORT);
+      return result;
+    } catch (e2) {
+      console.warn('loadSelfAttendanceRecords fallback also failed:', e2.message);
+      return [];
+    }
   }
-  return records;
 }
 
 async function syncSelfAttendanceToRoleCollection(date, attendanceData, role = currentRole, user = currentUser) {
@@ -4146,6 +4184,8 @@ async function syncSelfAttendanceToRoleCollection(date, attendanceData, role = c
   const collectionName = getAttendanceCollectionForRole(role);
   const userKey = getAttendanceUserKey(user);
   await FirebaseService.updateAttendanceByType(date, userKey, attendanceData, collectionName);
+  // Bust selfAttRecords cache so next renderOfficeAttHistory/renderSelfAttHistory re-fetches
+  if (currentSchoolId && user && user.uid) FGCache.del(currentSchoolId, 'selfAttRecords:' + user.uid);
 }
 
 // Firebase Security Rules for SaaS Multi-Tenant (copy these to Firestore Rules in Firebase Console):
@@ -4324,9 +4364,404 @@ service cloud.firestore {
 
 
 // ============================================================
-// FG CACHE — localStorage-backed read cache to minimise
-//            Firestore reads.  TTL = 5 min for live data,
-//            24 h for stable collections (students, staff…).
+// ENHANCED SYNC QUEUE — Manages offline changes & syncing
+// ============================================================
+const SyncQueue = {
+  DB_NAME: 'DrivePro_SyncDB',
+  STORE_NAME: 'syncQueue',
+  
+  async init() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+          const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id', autoIncrement: true });
+          store.createIndex('status', 'status', { unique: false });
+          store.createIndex('schoolId', 'schoolId', { unique: false });
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+        }
+      };
+    });
+  },
+
+  async addItem(operation) {
+    try {
+      const db = await this.init();
+      const item = {
+        id: `${Date.now()}_${Math.random()}`,
+        ...operation,
+        status: 'pending',
+        timestamp: Date.now(),
+        retries: 0
+      };
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        tx.objectStore(this.STORE_NAME).add(item);
+        tx.oncomplete = () => resolve(item);
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch(e) { console.warn('SyncQueue.addItem failed:', e.message); }
+  },
+
+  async getPendingItems(schoolId) {
+    try {
+      const db = await this.init();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this.STORE_NAME], 'readonly');
+        const index = tx.objectStore(this.STORE_NAME).index('schoolId');
+        const request = index.getAll(schoolId);
+        request.onsuccess = () => {
+          const pending = request.result.filter(item => item.status === 'pending');
+          resolve(pending);
+        };
+        request.onerror = () => reject(request.error);
+      });
+    } catch(e) { console.warn('SyncQueue.getPendingItems failed:', e.message); return []; }
+  },
+
+  async updateItemStatus(itemId, status) {
+    try {
+      const db = await this.init();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        const store = tx.objectStore(this.STORE_NAME);
+        const getReq = store.get(itemId);
+        getReq.onsuccess = () => {
+          if (getReq.result) {
+            getReq.result.status = status;
+            const updateReq = store.put(getReq.result);
+            updateReq.onsuccess = () => resolve(getReq.result);
+            updateReq.onerror = () => reject(updateReq.error);
+          }
+        };
+        getReq.onerror = () => reject(getReq.error);
+      });
+    } catch(e) { console.warn('SyncQueue.updateItemStatus failed:', e.message); }
+  },
+
+  async removeItem(itemId) {
+    try {
+      const db = await this.init();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        const request = tx.objectStore(this.STORE_NAME).delete(itemId);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch(e) { console.warn('SyncQueue.removeItem failed:', e.message); }
+  },
+
+  async clearSchool(schoolId) {
+    try {
+      const db = await this.init();
+      const items = await this.getPendingItems(schoolId);
+      for (const item of items) {
+        await this.removeItem(item.id);
+      }
+    } catch(e) { console.warn('SyncQueue.clearSchool failed:', e.message); }
+  }
+};
+
+// ============================================================
+// ENHANCED CACHE SERVICE — IndexedDB + localStorage hybrid
+// ============================================================
+const EnhancedCache = {
+  DB_NAME: 'DrivePro_CacheDB',
+  STORE_NAME: 'cache',
+
+  async init() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, 1);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+          const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'key' });
+          store.createIndex('schoolId', 'schoolId', { unique: false });
+          store.createIndex('expiry', 'expiry', { unique: false });
+        }
+      };
+    });
+  },
+
+  async set(schoolId, collection, data, ttl = 3600000) {
+    try {
+      const key = `${schoolId}:${collection}`;
+      const db = await this.init();
+      const entry = {
+        key,
+        schoolId,
+        collection,
+        data,
+        timestamp: Date.now(),
+        expiry: Date.now() + ttl
+      };
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        tx.objectStore(this.STORE_NAME).put(entry);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch(e) { console.warn('EnhancedCache.set failed:', e.message); }
+  },
+
+  async get(schoolId, collection) {
+    try {
+      const key = `${schoolId}:${collection}`;
+      const db = await this.init();
+      return new Promise((resolve) => {
+        const tx = db.transaction([this.STORE_NAME], 'readonly');
+        const request = tx.objectStore(this.STORE_NAME).get(key);
+        request.onsuccess = () => {
+          const entry = request.result;
+          if (!entry) return resolve(null);
+          if (Date.now() > entry.expiry) {
+            resolve(null);
+            // Clean up expired entry async
+            EnhancedCache.del(schoolId, collection).catch(e => console.warn('Expired cache cleanup:', e));
+          } else {
+            resolve(entry.data);
+          }
+        };
+        request.onerror = () => resolve(null);
+      });
+    } catch(e) { console.warn('EnhancedCache.get failed:', e.message); return null; }
+  },
+
+  async del(schoolId, collection) {
+    try {
+      const key = `${schoolId}:${collection}`;
+      const db = await this.init();
+      return new Promise((resolve) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        tx.objectStore(this.STORE_NAME).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    } catch(e) { console.warn('EnhancedCache.del failed:', e.message); }
+  },
+
+  async clearSchool(schoolId) {
+    try {
+      const db = await this.init();
+      return new Promise((resolve) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        const index = tx.objectStore(this.STORE_NAME).index('schoolId');
+        const request = index.openCursor(IDBKeyRange.only(schoolId));
+        request.onsuccess = (e) => {
+          const cursor = e.target.result;
+          if (cursor) {
+            cursor.delete();
+            cursor.continue();
+          }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    } catch(e) { console.warn('EnhancedCache.clearSchool failed:', e.message); }
+  },
+
+  async clearAll() {
+    try {
+      const db = await this.init();
+      return new Promise((resolve) => {
+        const tx = db.transaction([this.STORE_NAME], 'readwrite');
+        tx.objectStore(this.STORE_NAME).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    } catch(e) { console.warn('EnhancedCache.clearAll failed:', e.message); }
+  }
+};
+
+// ============================================================
+// SYNC MANAGER — Handles offline queue syncing to Firebase
+// ============================================================
+const SyncManager = {
+  syncInProgress: false,
+  syncInterval: null,
+
+  async initialize() {
+    // Sync on app startup
+    setTimeout(() => this.syncPendingChanges(), 2000);
+    
+    // Setup periodic sync (every 30 seconds)
+    this.syncInterval = setInterval(() => this.syncPendingChanges(), 30000);
+    
+    // Sync when connection restored
+    window.addEventListener('online', () => this.syncPendingChanges());
+  },
+
+  async syncPendingChanges() {
+    if (this.syncInProgress || !navigator.onLine || !currentSchoolId) return;
+    
+    this.syncInProgress = true;
+    try {
+      const items = await SyncQueue.getPendingItems(currentSchoolId);
+      for (const item of items) {
+        const success = await this.processQueueItem(item);
+        if (success) {
+          await SyncQueue.updateItemStatus(item.id, 'synced');
+          await SyncQueue.removeItem(item.id);
+        } else if (item.retries < 3) {
+          item.retries++;
+          await SyncQueue.updateItemStatus(item.id, 'pending');
+        } else {
+          await SyncQueue.updateItemStatus(item.id, 'failed');
+        }
+      }
+      // Refresh UI to reflect synced changes
+      if (items.length > 0) {
+        console.log(`Synced ${items.length} pending changes`);
+        this.invalidateRelatedCache(items);
+      }
+    } catch(e) { console.warn('SyncManager.syncPendingChanges error:', e.message); }
+    finally { this.syncInProgress = false; }
+  },
+
+  async processQueueItem(item) {
+    try {
+      const { operation, path, data } = item;
+      if (!path) return false;
+      
+      if (operation === 'set') {
+        await db.collection(path.split('/')[0]).doc(path.split('/')[1]).set(data, { merge: true });
+        return true;
+      } else if (operation === 'update') {
+        await db.collection(path.split('/')[0]).doc(path.split('/')[1]).update(data);
+        return true;
+      } else if (operation === 'add') {
+        await db.collection(path).add(data);
+        return true;
+      } else if (operation === 'delete') {
+        await db.collection(path.split('/')[0]).doc(path.split('/')[1]).delete();
+        return true;
+      }
+      return false;
+    } catch(e) { console.warn('processQueueItem failed:', e.message); return false; }
+  },
+
+  invalidateRelatedCache(items) {
+    const collections = new Set(items.map(item => item.collection));
+    collections.forEach(col => {
+      FGCache.invalidate(currentSchoolId, col);
+      EnhancedCache.del(currentSchoolId, col).catch(e => {});
+    });
+  },
+
+  cleanup() {
+    if (this.syncInterval) clearInterval(this.syncInterval);
+  }
+};
+
+// ============================================================
+// DATA WRITE WRAPPER — Queues writes & syncs local + Firebase
+// ============================================================
+const DataWriter = {
+  async queueWrite(operation, collection, docId, data) {
+    try {
+      // Prepare queue item
+      const queueItem = {
+        operation,
+        collection,
+        path: docId ? `${collection}/${docId}` : collection,
+        data,
+        schoolId: currentSchoolId,
+        userId: currentUser ? currentUser.uid : 'unknown'
+      };
+
+      // Try to write to Firebase immediately (if online)
+      let firebaseSuccess = false;
+      if (navigator.onLine) {
+        try {
+          await this.executeWrite(operation, collection, docId, data);
+          firebaseSuccess = true;
+          // Invalidate cache on successful write
+          FGCache.invalidate(currentSchoolId, collection);
+          EnhancedCache.del(currentSchoolId, collection).catch(e => {});
+        } catch(e) {
+          console.warn('Firebase write failed, queuing:', e.message);
+        }
+      }
+
+      // Always queue the write (for offline or retry scenarios)
+      if (!firebaseSuccess) {
+        await SyncQueue.addItem(queueItem);
+      }
+
+      return firebaseSuccess;
+    } catch(e) {
+      console.error('DataWriter.queueWrite error:', e);
+      return false;
+    }
+  },
+
+  async executeWrite(operation, collection, docId, data) {
+    const path = docId ? `${collection}/${docId}` : collection;
+    const parts = path.split('/');
+
+    if (operation === 'set') {
+      return await db.collection(parts[0]).doc(parts[1]).set(data, { merge: true });
+    } else if (operation === 'update') {
+      return await db.collection(parts[0]).doc(parts[1]).update(data);
+    } else if (operation === 'add') {
+      return await db.collection(collection).add(data);
+    } else if (operation === 'delete') {
+      return await db.collection(parts[0]).doc(parts[1]).delete();
+    }
+  }
+};
+
+// ============================================================
+// OFFLINE STATUS MONITOR
+// ============================================================
+const OfflineMonitor = {
+  isOnline: navigator.onLine,
+
+  init() {
+    window.addEventListener('online', () => this.onOnline());
+    window.addEventListener('offline', () => this.onOffline());
+  },
+
+  onOnline() {
+    this.isOnline = true;
+    console.log('📡 Back online - syncing changes');
+    this.updateUI();
+    SyncManager.syncPendingChanges().catch(e => console.warn('Sync error:', e));
+  },
+
+  onOffline() {
+    this.isOnline = false;
+    console.log('🔌 Offline - changes will be queued');
+    this.updateUI();
+  },
+
+  updateUI() {
+    try {
+      const statusEl = document.querySelector('[data-status="offline-indicator"]');
+      if (statusEl) {
+        if (this.isOnline) {
+          statusEl.style.display = 'none';
+        } else {
+          statusEl.style.display = 'flex';
+          statusEl.textContent = '🔌 Offline - Changes will sync when online';
+        }
+      }
+    } catch(e) {}
+  }
+};
+
+// Initialize offline monitor
+OfflineMonitor.init();
+
+
+// ============================================================
+// FG CACHE — localStorage + IndexedDB hybrid cache system
+//            Minimizes Firestore reads with fallback support
 // ============================================================
 const FGCache = {
   TTL_SHORT:  15  * 60 * 1000,   // 15 min — transactions, fuel, notifications (was 5 min)
@@ -4339,23 +4774,47 @@ const FGCache = {
 
   get(schoolId, collection) {
     try {
+      // Try localStorage first (faster)
       const raw = localStorage.getItem(this._key(schoolId, collection));
-      if (!raw) return null;
-      const { ts, data, ttl } = JSON.parse(raw);
-      if (Date.now() - ts > ttl) { this.del(schoolId, collection); return null; }
-      return data;
-    } catch(e) { return null; }
+      if (raw) {
+        const { ts, data, ttl } = JSON.parse(raw);
+        if (Date.now() - ts <= ttl) return data;
+        this.del(schoolId, collection);
+      }
+    } catch(e) { }
+    
+    // Fallback to IndexedDB (async) — don't block, but refresh later
+    if (typeof EnhancedCache !== 'undefined') {
+      EnhancedCache.get(schoolId, collection)
+        .then(data => {
+          if (data && !localStorage.getItem(this._key(schoolId, collection))) {
+            this.set(schoolId, collection, data, this.TTL_MEDIUM);
+          }
+        })
+        .catch(e => {});
+    }
+    return null;
   },
 
   set(schoolId, collection, data, ttl) {
     try {
+      // Store in localStorage
       localStorage.setItem(this._key(schoolId, collection),
         JSON.stringify({ ts: Date.now(), data, ttl: ttl || this.TTL_MEDIUM }));
     } catch(e) { /* storage full — ignore */ }
+    
+    // Also store in IndexedDB for larger data & persistence
+    if (typeof EnhancedCache !== 'undefined') {
+      EnhancedCache.set(schoolId, collection, data, ttl || this.TTL_MEDIUM)
+        .catch(e => console.warn('EnhancedCache.set failed:', e));
+    }
   },
 
   del(schoolId, collection) {
     try { localStorage.removeItem(this._key(schoolId, collection)); } catch(e) {}
+    if (typeof EnhancedCache !== 'undefined') {
+      EnhancedCache.del(schoolId, collection).catch(e => {});
+    }
   },
 
   // Invalidate a collection for a school (call after any write to that collection)
@@ -4673,6 +5132,9 @@ const FirebaseService = {
     currentData[userName] = attendanceData;
     
     await docRef.set(currentData, { merge: true });
+
+    // Bust the history cache so the next render re-fetches fresh data
+    if (currentSchoolId) FGCache.del(currentSchoolId, collectionName + ':history');
   },
 
   async getAttendanceByType(date, collectionName) {
@@ -4696,6 +5158,12 @@ const FirebaseService = {
   },
 
   async getAttendanceHistoryByType(collectionName, limit = 30) {
+    // Cache key: collectionName + schoolId — busted when attendance is marked (see bustAttendanceHistoryCache)
+    const cacheKey = collectionName + ':history';
+    if (currentSchoolId) {
+      const cached = FGCache.get(currentSchoolId, cacheKey);
+      if (cached) return cached;
+    }
     let collectionRef;
     switch(collectionName) {
       case 'staffAttendance':
@@ -4714,7 +5182,10 @@ const FirebaseService = {
       .orderBy(firebase.firestore.FieldPath.documentId(), 'desc')
       .limit(limit);
     const snapshot = await query.get();
-    return snapshot.docs.map(doc => ({ date: doc.id, ...doc.data() }));
+    const result = snapshot.docs.map(doc => ({ date: doc.id, ...doc.data() }));
+    // Cache with a short TTL — stale for at most 5 minutes, busted immediately on mark
+    if (currentSchoolId) FGCache.set(currentSchoolId, cacheKey, result, FGCache.TTL_SHORT);
+    return result;
   },
 
   // Authentication helpers
@@ -4821,31 +5292,38 @@ const FirebaseService = {
 
         console.log('getUserMemberSchools index doc found, schools:', schoolIds);
 
-        for (const schoolId of schoolIds) {
-          const storedRole = roles[schoolId] || 'office';
-          // Normalize: treat 'admin' as 'office' to match login buttons
-          const resolvedRole = (storedRole === 'admin') ? 'office' : storedRole;
-          
-          // Try to fetch school document, but use index data if permission denied
+        // Fetch school docs in chunks (Firestore 'in' query supports up to 10 ids)
+        const chunkSize = 10;
+        for (let i = 0; i < schoolIds.length; i += chunkSize) {
+          const chunk = schoolIds.slice(i, i + chunkSize);
           try {
-            const schoolDoc = await this.schoolsRef.doc(schoolId).get();
-            if (schoolDoc.exists && schoolDoc.data().status !== 'deleted') {
-              userSchools.push({
-                id: schoolDoc.id,
-                ...schoolDoc.data(),
-                userRole: resolvedRole
-              });
+            const snap = await this.schoolsRef.where(firebase.firestore.FieldPath.documentId(), 'in', chunk).get();
+            const found = new Set(snap.docs.map(d => d.id));
+            // Add found docs
+            snap.docs.forEach(doc => {
+              const sid = doc.id;
+              const storedRole = roles[sid] || 'office';
+              const resolvedRole = (storedRole === 'admin') ? 'office' : storedRole;
+              if (doc.exists && doc.data().status !== 'deleted') {
+                userSchools.push({ id: sid, ...doc.data(), userRole: resolvedRole });
+              }
+            });
+            // For any ids not returned (missing or permission-restricted), use index fallback
+            for (const schoolId of chunk) {
+              if (!found.has(schoolId)) {
+                const storedRole = roles[schoolId] || 'office';
+                const resolvedRole = (storedRole === 'admin') ? 'office' : storedRole;
+                userSchools.push({ id: schoolId, userRole: resolvedRole, ownerEmail: ownerEmails[schoolId] || null, name: 'School (details unavailable)', _fromIndex: true });
+              }
             }
           } catch (schoolErr) {
-            console.warn('Could not fetch school', schoolId, ':', schoolErr.message);
-            // Fallback: use minimal data from index for role verification
-            userSchools.push({
-              id: schoolId,
-              userRole: resolvedRole,
-              ownerEmail: ownerEmails[schoolId] || null,
-              name: 'School (details unavailable)',
-              _fromIndex: true
-            });
+            console.warn('Chunk fetch failed for schools', chunk, ':', schoolErr.message);
+            // Fallback: push minimal index info for each id in the chunk
+            for (const schoolId of chunk) {
+              const storedRole = roles[schoolId] || 'office';
+              const resolvedRole = (storedRole === 'admin') ? 'office' : storedRole;
+              userSchools.push({ id: schoolId, userRole: resolvedRole, ownerEmail: ownerEmails[schoolId] || null, name: 'School (details unavailable)', _fromIndex: true });
+            }
           }
         }
         return userSchools;
@@ -5085,7 +5563,9 @@ async function loadUserMemberSchools() {
   try {
     if (!currentUser) return;
     
-    userSchools = await FirebaseService.getUserMemberSchools(currentUser.uid);
+    // FIX 4: Use login-time cached result if available — avoids 3rd duplicate getUserMemberSchools call
+    userSchools = _loginTimeMemberSchools || await FirebaseService.getUserMemberSchools(currentUser.uid);
+    _loginTimeMemberSchools = null; // Clear cache after use
     const memberSchools = userSchools; // Keep for UI updates
     
     const schoolSelect = document.getElementById('school-select');
@@ -5210,7 +5690,10 @@ function setAttendanceRecordsForDate(date, records) {
 
 // Load initial data from Firebase
 async function loadInitialData() {
-  // Helper: tag incoming items with current school and merge (removes old entries for this school)
+  // FIX 2: Only load data that has NO realtime listener.
+  // Students, transactions, attendance (3 types), and schedule are covered by setupRealtimeListeners
+  // — they will fire immediately on attach and populate data.* themselves, so fetching them here
+  // causes a duplicate read. We only fetch: dlTests, fuel, notifications, otherServices, agents, forms, vehicles.
   function mergeSchoolData(existing, incoming, schoolId) {
     const tagged = incoming.map(item => ({ ...item, schoolId: item.schoolId || schoolId }));
     const others = (existing || []).filter(item => item.schoolId && item.schoolId !== schoolId);
@@ -5219,54 +5702,46 @@ async function loadInitialData() {
   const sid = currentSchoolId;
 
   try {
-    // Load data based on user role
     if (currentRole === 'owner') {
-      // Owner loads all data — scoped to the currently selected school
-      const [students, transactions, dlTests, fuel, notifications, otherSvcs, agents, forms] = await Promise.allSettled([
-        FirebaseService.getStudents(),
-        FirebaseService.getTransactions(),
+      // Owner: load only non-listener-covered collections
+      const [dlTests, fuel, notifications, otherSvcs, agents, forms] = await Promise.allSettled([
         FirebaseService.getDocuments(FirebaseService.dlTestsRef,        'createdAt','desc','dlTests',       FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(FirebaseService.fuelRef,            'createdAt','desc','fuel',          FGCache.TTL_SHORT),
         FirebaseService.getDocuments(FirebaseService.notificationsRef,   'createdAt','desc','notifications', FGCache.TTL_SHORT),
-        FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('agents'),'createdAt','desc','agents',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid),'createdAt','desc','otherServices',FGCache.TTL_MEDIUM),
+        FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('agents'),'createdAt','desc','agents',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid),        'createdAt','desc','forms',       FGCache.TTL_MEDIUM)
       ]);
-      if (students.status === 'fulfilled')      data.students      = mergeSchoolData(data.students,      students.value,      sid);
-      if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
       if (dlTests.status === 'fulfilled')       data.dlTests       = mergeSchoolData(data.dlTests,       dlTests.value,       sid);
       if (fuel.status === 'fulfilled')          data.fuel          = mergeSchoolData(data.fuel,          fuel.value,          sid);
       if (notifications.status === 'fulfilled') data.notifications = mergeSchoolData(data.notifications, notifications.value, sid);
-      if (agents.status === 'fulfilled')       data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
+      if (agents.status === 'fulfilled')        data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
-      // Load vehicles from Firebase (owner can see all school vehicles)
+      // Vehicles have no listener — still fetch here
       try {
         const vehCached = FGCache.get(sid, 'vehicles');
         if (vehCached) {
           data.vehicles = mergeSchoolData(data.vehicles, vehCached, sid);
         } else {
-          const vehSnap = await db.collection('schools').doc(sid).collection('vehicles').get();
-          const vehDocs = vehSnap.docs.map(d => ({ id: d.id, firebaseId: d.id, ...d.data(), schoolId: sid }));
-          FGCache.set(sid, 'vehicles', vehDocs, FGCache.TTL_LONG);
-          data.vehicles = mergeSchoolData(data.vehicles, vehDocs, sid);
+          const vehDocs = await FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('vehicles'), 'createdAt', 'desc', 'vehicles', FGCache.TTL_LONG);
+          const tagged = (vehDocs||[]).map(d => (d.schoolId = d.schoolId || sid, d.firebaseId = d.id, d));
+          FGCache.set(sid, 'vehicles', tagged, FGCache.TTL_LONG);
+          data.vehicles = mergeSchoolData(data.vehicles, tagged, sid);
         }
       } catch(e) { console.warn('Could not load vehicles:', e.message); }
     } else if (currentRole === 'office') {
-      const [students, transactions, dlTests, notifications, agents, otherSvcs, forms] = await Promise.allSettled([
-        FirebaseService.getStudents(),
-        FirebaseService.getTransactions(),
+      // Office: load only non-listener-covered collections
+      const [dlTests, notifications, agents, otherSvcs, forms] = await Promise.allSettled([
         FirebaseService.getDocuments(FirebaseService.dlTestsRef,        'createdAt','desc','dlTests',       FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(FirebaseService.notificationsRef,   'createdAt','desc','notifications', FGCache.TTL_SHORT),
         FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('agents'),'createdAt','desc','agents',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('otherServices').where('schoolId','==',sid),'createdAt','desc','otherServices',FGCache.TTL_MEDIUM),
         FirebaseService.getDocuments(db.collection('forms').where('schoolId','==',sid),        'createdAt','desc','forms',       FGCache.TTL_MEDIUM)
       ]);
-      if (students.status === 'fulfilled')      data.students      = mergeSchoolData(data.students,      students.value,      sid);
-      if (transactions.status === 'fulfilled')  data.transactions  = mergeSchoolData(data.transactions,  transactions.value,  sid);
       if (dlTests.status === 'fulfilled')       data.dlTests       = mergeSchoolData(data.dlTests,       dlTests.value,       sid);
       if (notifications.status === 'fulfilled') data.notifications = mergeSchoolData(data.notifications, notifications.value, sid);
-      if (agents.status === 'fulfilled')       data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
+      if (agents.status === 'fulfilled')        data.agents        = mergeSchoolData(data.agents,        agents.value,        sid);
       if (otherSvcs.status === 'fulfilled')     data.otherServices = mergeSchoolData(data.otherServices, otherSvcs.value,     sid);
       if (forms.status === 'fulfilled')         data.forms         = mergeSchoolData(data.forms,         forms.value,         sid);
     }
@@ -5278,49 +5753,19 @@ async function loadInitialData() {
       updateAgentDatalist();
     }
 
+    // instructor: fuel has no listener — fetch it; students are covered by listener
     if (currentRole === 'instructor') {
-      const [students, fuel] = await Promise.allSettled([
-        FirebaseService.getStudents(),
+      const [fuel] = await Promise.allSettled([
         FirebaseService.getDocuments(FirebaseService.fuelRef)
       ]);
-      if (students.status === 'fulfilled') data.students = mergeSchoolData(data.students, students.value, sid);
-      if (fuel.status === 'fulfilled')     data.fuel     = mergeSchoolData(data.fuel,     fuel.value,     sid);
+      if (fuel.status === 'fulfilled') data.fuel = mergeSchoolData(data.fuel, fuel.value, sid);
     }
 
-    // Load today's attendance (all roles need this)
-    const today = new Date().toISOString().split('T')[0];
-    try {
-      data.attendance[today] = await FirebaseService.getAttendance(today);
-    } catch (e) {
-      console.warn('Could not load attendance:', e.message);
-      data.attendance[today] = [];
-    }
+    // NOTE: Students, transactions, attendance (3 types), and schedule are intentionally
+    // NOT fetched here — their realtime listeners (setupRealtimeListeners) fire immediately
+    // on attachment and populate data.* themselves. Fetching here would double the reads.
 
-    try {
-      data.adminAttendance[today] = await FirebaseService.getAttendanceByType(today, 'adminAttendance');
-    } catch (e) {
-      console.warn('Could not load admin attendance:', e.message);
-      data.adminAttendance[today] = {};
-    }
-
-    try {
-      data.instructorAttendance[today] = await FirebaseService.getAttendanceByType(today, 'instructorAttendance');
-    } catch (e) {
-      console.warn('Could not load instructor attendance:', e.message);
-      data.instructorAttendance[today] = {};
-    }
-    
-    // Load schedule entries for all days
-    try {
-      const scheduleSnapshot = await FirebaseService.scheduleRef.get();
-      scheduleSnapshot.forEach(doc => {
-        data.dailySchedule[doc.id] = doc.data();
-      });
-    } catch (e) {
-      console.warn('Could not load schedule:', e.message);
-    }
-    
-    console.log('Initial data loaded from Firebase');
+    console.log('Initial data loaded from Firebase (listener-covered collections skipped)');
   } catch (error) {
     console.error('Error loading initial data:', error);
   }
@@ -5362,6 +5807,7 @@ function setupRealtimeListeners() {
         const tagged = transactions.map(t => ({ ...t, schoolId: t.schoolId || _listenSchoolId }));
         const others = (data.transactions || []).filter(t => t.schoolId && t.schoolId !== _listenSchoolId);
         data.transactions = [...others, ...tagged];
+        data._transactionsLoaded = true; // mark so renderCashflow uses in-memory data
         if (currentPage === 'cashflow' || currentPage === 'dashboard') {
           renderCashflow();
           renderDashboard();
@@ -5590,7 +6036,9 @@ async function verifyUserRole(userId, selectedRole) {
     } else {
       console.log('Checking non-owner role:', selectedRole, 'for user:', userId);
       // Check if user is assigned as office/instructor in any school
-      const memberSchools = await FirebaseService.getUserMemberSchools(userId);
+      // FIX 4: Cache result so validateSubscriptionForRole and loadUserMemberSchools don't re-fetch
+      _loginTimeMemberSchools = await FirebaseService.getUserMemberSchools(userId);
+      const memberSchools = _loginTimeMemberSchools;
       console.log('Member schools for user', userId, ':', memberSchools);
       console.log('Looking for role:', selectedRole, 'in schools:', memberSchools);
       
@@ -5810,11 +6258,27 @@ async function validateSubscriptionForRole(userId, userEmail, selectedRole, pref
     // For owners, check their own pause status
     ownerEmail = userEmail;
     console.log(`User is owner, checking pause list for: ${ownerEmail}`);
+
+    // FIX 1: Use isPaused flag from prefetched Owners doc — saves 2 reads for non-paused owners
+    const isPaused = prefetchedOwnerData?.isPaused === true;
+    if (!isPaused) {
+      console.log('Owner isPaused flag not set — skipping onpause reads (0 extra reads)');
+      return true;
+    }
+    console.log('Owner isPaused flag is set — checking onpause collection');
+    const subscriptionCheck = await checkUserSubscription(userId, ownerEmail, 'owner', prefetchedOwnerData);
+    if (!subscriptionCheck.valid) {
+      console.log(`Subscription validation failed: ${subscriptionCheck.message}`);
+      throw new Error(`Your subscription is incomplete. Please contact support to complete the subscription setup.`);
+    }
+    console.log(`Subscription validation passed for paused owner: ${ownerEmail}`);
+    return true;
   } else {
     // For non-owners, find their associated owner
     console.log(`User is ${selectedRole}, finding associated owner...`);
     try {
-      const memberSchools = await FirebaseService.getUserMemberSchools(userId);
+      // FIX 4: Use cached member schools if available from verifyUserRole to avoid duplicate read
+      const memberSchools = _loginTimeMemberSchools || await FirebaseService.getUserMemberSchools(userId);
       console.log(`Member schools for ${userEmail}:`, memberSchools);
       
       if (memberSchools.length > 0) {
@@ -5837,7 +6301,7 @@ async function validateSubscriptionForRole(userId, userEmail, selectedRole, pref
     return true;
   }
   
-  // Check if the owner is in pause list
+  // Non-owner path: still need to check onpause for associated owner
   let isOwnerOnpause = false;
   try {
     // Try UID-based lookup first
@@ -5862,13 +6326,11 @@ async function validateSubscriptionForRole(userId, userEmail, selectedRole, pref
   // Only check subscription if the owner is in the pause list
   if (isOwnerOnpause) {
     console.log(`Owner ${ownerEmail} is in pause list, checking subscription...`);
-    // For owners, pass pre-fetched data to avoid a redundant Owners doc read
-    const subscriptionCheck = await checkUserSubscription(userId, ownerEmail, 'owner', selectedRole === 'owner' ? prefetchedOwnerData : undefined);
+    const subscriptionCheck = await checkUserSubscription(userId, ownerEmail, 'owner', undefined);
     
     if (!subscriptionCheck.valid) {
-      const userRoleText = selectedRole === 'owner' ? 'Your' : `Your owner's`;
       console.log(`Subscription validation failed: ${subscriptionCheck.message}`);
-      throw new Error(`${userRoleText} subscription is incomplete. Please contact support to complete the subscription setup.`);
+      throw new Error(`Your owner's subscription is incomplete. Please contact support to complete the subscription setup.`);
     }
     
     console.log(`Subscription validation passed for owner in pause list: ${ownerEmail}`);
@@ -6113,6 +6575,8 @@ async function doLogin() {
 
   // Prevent onAuthStateChanged from also running while we handle login manually
   _manualLoginInProgress = true;
+  // FIX 4: Reset member-schools cache for a clean login flow
+  _loginTimeMemberSchools = null;
 
   try {
     const email = (document.getElementById('login-user').value || '').trim();
@@ -6275,6 +6739,19 @@ async function selectDashboardSchool() {
 }
 
 async function doLogout() {
+  // Unsubscribe any active realtime listeners before logging out
+  try {
+    listeners.forEach(unsubscribe => { try { unsubscribe(); } catch (e) {} });
+    listeners.length = 0;
+  } catch (e) {
+    console.warn('Could not clear listeners before logout:', e.message);
+  }
+
+  // Clean up sync manager
+  try {
+    SyncManager.cleanup();
+  } catch(e) { console.warn('SyncManager cleanup error:', e.message); }
+
   try {
     await FirebaseService.signOut();
   } catch(e) { console.warn('Sign-out error:', e.message); }
@@ -6283,6 +6760,8 @@ async function doLogout() {
   try { localStorage.removeItem('fg_role'); } catch(e){}
   try { localStorage.removeItem('fg_schoolId'); } catch(e){}
   try { FGCache.clearAll(); } catch(e){}
+  try { EnhancedCache.clearAll(); } catch(e){}
+  try { SyncQueue.clearSchool(currentSchoolId); } catch(e){}
 
   // Reset all state
   currentSchoolId = null;
@@ -6554,9 +7033,9 @@ function refreshPage(id) {
           data.admins = cached;
           renderAdminsTable();
         } else {
-          db.collection('schools').doc(currentSchoolId).collection('users').get()
-            .then(snap => {
-              data.admins = snap.docs.map(d => ({ id: d.id, firebaseId: d.id, ...d.data() }));
+          FirebaseService.getDocuments(db.collection('schools').doc(currentSchoolId).collection('users'),'addedAt','desc','admins',FGCache.TTL_LONG)
+            .then(list => {
+              data.admins = (list||[]).map(d => ({ id: d.id, firebaseId: d.id, ...d }));
               FGCache.set(currentSchoolId, 'admins', data.admins, FGCache.TTL_LONG);
               renderAdminsTable();
             }).catch(e => { console.warn('Could not load admins:', e.message); renderAdminsTable(); });
@@ -6573,9 +7052,9 @@ function refreshPage(id) {
           data.staff = cached;
           renderStaffTable();
         } else {
-          db.collection('schools').doc(currentSchoolId).collection('staff').get()
-            .then(snap => {
-              data.staff = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          FirebaseService.getDocuments(db.collection('schools').doc(currentSchoolId).collection('staff'),'createdAt','desc','staff',FGCache.TTL_LONG)
+            .then(list => {
+              data.staff = (list||[]).map(d => ({ id: d.id, ...d }));
               FGCache.set(currentSchoolId, 'staff', data.staff, FGCache.TTL_LONG);
               renderStaffTable();
             }).catch(e => { console.warn('Could not load staff:', e.message); renderStaffTable(); });
@@ -6605,15 +7084,16 @@ async function fetchSchoolSnapshot(schoolId) {
   const cached = FGCache.get(schoolId, 'snapshot');
   if (cached) return cached;
   try {
-    const [studentsSnap, txSnap, staffSnap] = await Promise.all([
-      db.collection('schools').doc(schoolId).collection('students').get(),
-      db.collection('schools').doc(schoolId).collection('transactions').get(),
-      db.collection('schools').doc(schoolId).collection('staff').get()
+    // Use FirebaseService.getDocuments which respects FGCache to avoid repeated full-collection reads
+    const [studentsDocs, txDocs, staffDocs] = await Promise.all([
+      FirebaseService.getDocuments(db.collection('schools').doc(schoolId).collection('students'), 'enrolled', 'desc', 'students', FGCache.TTL_SHORT),
+      FirebaseService.getDocuments(db.collection('schools').doc(schoolId).collection('transactions'), 'date', 'desc', 'transactions', FGCache.TTL_SHORT),
+      FirebaseService.getDocuments(db.collection('schools').doc(schoolId).collection('staff'), 'createdAt', 'desc', 'staff', FGCache.TTL_LONG)
     ]);
     const result = {
-      students:     studentsSnap.docs.map(d => ({ id: d.id, ...d.data(), schoolId })),
-      transactions: txSnap.docs.map(d => ({ id: d.id, ...d.data(), schoolId })),
-      staff:        staffSnap.docs.map(d => ({ id: d.id, ...d.data(), schoolId }))
+      students:     (studentsDocs||[]).map(d => (d.schoolId = schoolId, d)),
+      transactions: (txDocs||[]).map(d => (d.schoolId = schoolId, d)),
+      staff:        (staffDocs||[]).map(d => (d.schoolId = schoolId, d))
     };
     FGCache.set(schoolId, 'snapshot', result, FGCache.TTL_SHORT);
     return result;
@@ -6935,14 +7415,18 @@ async function renderSchoolSelector() {
   console.log('renderSchoolSelector called');
   console.log('userSchools before loading:', userSchools);
   
-  // Reload schools data to ensure it's fresh
-  try {
-    console.log('Loading user schools...');
-    await loadUserSchools();
-    userSchools = (userSchools || []).filter(Boolean);
-    console.log('userSchools after loading:', userSchools);
-  } catch (error) {
-    console.error('Error loading schools:', error);
+  // Only reload if we have no schools yet — skip the duplicate query if already populated
+  if (!userSchools || userSchools.length === 0) {
+    try {
+      console.log('Loading user schools...');
+      await loadUserSchools();
+      userSchools = (userSchools || []).filter(Boolean);
+      console.log('userSchools after loading:', userSchools);
+    } catch (error) {
+      console.error('Error loading schools:', error);
+    }
+  } else {
+    console.log('userSchools already loaded, skipping query:', userSchools.length, 'schools');
   }
   
   // Wait a moment for the page to be fully visible
@@ -7367,7 +7851,9 @@ async function saveSchoolDetails() {
       updates.stampUrl = b64;
     }
 
-    await db.collection('schools').doc(schoolId).update(updates);
+    const updateSuccess = await DataWriter.queueWrite('update', 'schools', schoolId, updates);
+    FGCache.invalidate(schoolId, 'schools');
+    EnhancedCache.del(schoolId, 'schools').catch(e => {});
 
     // Update local cache
     const idx = (userSchools||[]).findIndex(s=>s.id===schoolId);
@@ -7823,7 +8309,7 @@ async function doRestoreSchoolFromBackup(schoolId, schoolName, type) {
     }
 
     // Clean up the backup archive entry (optional — keeps Firestore tidy)
-    try { await db.collection('deletedSchools').doc(schoolId).delete(); } catch(e) {}
+    try { await DataWriter.queueWrite('delete', 'deletedSchools', schoolId, null); EnhancedCache.del(schoolId, 'deletedSchools').catch(e => {}); } catch(e) {}
     _clearLocalBackupEntry(schoolId);
 
     setProgress(100, 'Done!');
@@ -8581,9 +9067,16 @@ async function addStudentFromModal() {
           classTime: classTime || '',
           sessionDuration,
           schoolId: currentSchoolId,
-          createdAt: new Date().toISOString()
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
         };
-        await db.collection('schools').doc(currentSchoolId).collection('schedule').add(scheduleEntry);
+        
+        const schedSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/schedule', null, scheduleEntry);
+        FGCache.invalidate(currentSchoolId, 'schedule');
+        EnhancedCache.del(currentSchoolId, 'schedule').catch(e => {});
+        
+        if (!schedSuccess) {
+          console.log('Schedule queued for sync');
+        }
       } catch(schedErr) { console.warn('Schedule save failed:', schedErr.message); }
     }
 
@@ -8694,12 +9187,23 @@ async function viewStudent(id) {
   const studentId = String(id);
   let s = data.students.find(x => String(x.firebaseId) === studentId || String(x.id) === studentId);
   
-  // If not found locally or we want fresh data, fetch from Firebase
+  // If not found locally, try cache-first (FGCache / FirebaseService) before direct read
   if (!s && currentSchoolId && typeof db !== 'undefined') {
     try {
-      const doc = await db.collection('schools').doc(currentSchoolId).collection('students').doc(id).get();
-      if (doc.exists) {
-        s = { ...doc.data(), firebaseId: doc.id, id: doc.id };
+      const cached = FGCache.get(currentSchoolId, 'students');
+      if (cached) {
+        const found = (cached||[]).find(x => String(x.firebaseId) === studentId || String(x.id) === studentId || String(x.studentId) === studentId);
+        if (found) s = Object.assign({}, found, { firebaseId: found.firebaseId || found.id, id: found.id });
+      }
+      if (!s) {
+        const studentsList = await FirebaseService.getStudents();
+        const found = (studentsList||[]).find(x => String(x.firebaseId || x.id) === studentId || String(x.studentId) === studentId);
+        if (found) s = Object.assign({}, found, { firebaseId: found.firebaseId || found.id, id: found.id });
+      }
+      // Last resort: direct document read (rare)
+      if (!s) {
+        const doc = await db.collection('schools').doc(currentSchoolId).collection('students').doc(id).get();
+        if (doc.exists) s = { ...doc.data(), firebaseId: doc.id, id: doc.id };
       }
     } catch(e) {
       console.warn('Could not fetch student from Firebase:', e.message);
@@ -9014,13 +9518,20 @@ async function saveStudentCredentialDetails(studentId) {
 
   if (currentSchoolId && typeof db !== 'undefined') {
     try {
-      await db.collection('schools').doc(currentSchoolId).collection('students').doc(id).update(updates);
+      const updateSuccess = await DataWriter.queueWrite('update', 'schools/' + currentSchoolId + '/students', id, updates);
+      FGCache.invalidate(currentSchoolId, 'students');
+      EnhancedCache.del(currentSchoolId, 'students').catch(e => {});
+      const msg = document.getElementById('student-detail-save-msg');
+      if (msg) { msg.textContent = updateSuccess ? 'Saved ✅' : 'Queued ⏳'; setTimeout(() => { if (msg) msg.textContent=''; }, 3000); }
     } catch (e) {
       console.warn('Could not save licence info to DB:', e.message);
+      const msg = document.getElementById('student-detail-save-msg');
+      if (msg) { msg.textContent = 'Save failed'; setTimeout(() => { if (msg) msg.textContent=''; }, 3000); }
     }
+  } else {
+    const msg = document.getElementById('student-detail-save-msg');
+    if (msg) { msg.textContent = 'Saved successfully'; setTimeout(() => { if (msg) msg.textContent=''; }, 3000); }
   }
-  const msg = document.getElementById('student-detail-save-msg');
-  if (msg) { msg.textContent = 'Saved successfully'; setTimeout(() => { if (msg) msg.textContent=''; }, 3000); }
   switchStudentDetailTab('normal');
 }
 
@@ -9146,16 +9657,8 @@ async function sendStudentClassSchedule(studentId) {
 }
 
 async function loadStudentAttendanceStats(firebaseId) {
-  // Load student attendance history and update any stats panels in the modal
-  if (!currentSchoolId || !firebaseId || typeof db === 'undefined') return;
-  try {
-    const snap = await db.collection('schools').doc(currentSchoolId)
-      .collection('studentAttendance')
-      .where('studentId', '==', String(firebaseId))
-      .orderBy('date','desc').limit(30).get();
-    const records = snap.docs.map(d => d.data());
-    // Could inject into modal here if we add an attendance section — placeholder for future
-  } catch(e) { /* non-fatal */ }
+  // Results were never used (placeholder for future modal section) — skip the read
+  return;
 }
 
 function openAddInstallmentForm(studentId) {
@@ -9191,10 +9694,12 @@ async function saveInstallment(studentId) {
   try {
     // Save to Firebase
     if (currentSchoolId && firebaseDocId) {
-      await db.collection('schools').doc(currentSchoolId).collection('students').doc(firebaseDocId).update({
+      const updateSuccess = await DataWriter.queueWrite('update', 'schools/' + currentSchoolId + '/students', firebaseDocId, {
         paid: s.paid,
         installments: s.installments
       });
+      FGCache.invalidate(currentSchoolId, 'students');
+      EnhancedCache.del(currentSchoolId, 'students').catch(e => {});
     }
 
     // Add to cashflow — scoped to this school
@@ -9277,10 +9782,16 @@ async function renderCashflow() {
     const monthFilter = document.getElementById('cf-month-filter')?.value || new Date().toISOString().slice(0,7);
     let transactions;
     
-    if (monthFilter) {
-      transactions = await FirebaseService.getTransactions(monthFilter);
+    // Use in-memory data (populated by realtime listener) and filter client-side.
+    // Only fall back to a Firestore query if data.transactions hasn't been loaded yet.
+    const inMemory = (data.transactions || []).filter(t => !currentSchoolId || t.schoolId === currentSchoolId);
+    if (inMemory.length > 0 || data._transactionsLoaded) {
+      transactions = monthFilter
+        ? inMemory.filter(t => t.date && t.date.startsWith(monthFilter))
+        : inMemory;
     } else {
-      transactions = data.transactions;
+      // First render before listener has fired — fetch once and cache
+      transactions = await FirebaseService.getTransactions(monthFilter);
     }
     
     // Apply role-based filtering
@@ -9354,7 +9865,7 @@ function confirmDeleteTransaction(id) {
       '</div>' +
       '<p style="font-size:14px;color:var(--text);margin-bottom:16px;">This will permanently remove the transaction entry. <strong>This cannot be undone.</strong></p>' +
       '<div style="display:flex;gap:10px;">' +
-        '<button class="btn btn-danger" onclick="deleteTransaction(' + JSON.stringify(String(id)) + ')" style="flex:1;">🗑 Yes, Delete</button>' +
+        '<button class="btn btn-danger" id="btn-confirm-delete-tx" data-tx-id="' + String(id).replace(/"/g, '&quot;') + '" onclick="deleteTransaction(this.dataset.txId)" style="flex:1;">🗑 Yes, Delete</button>' +
         '<button class="btn btn-outline" onclick="document.getElementById(\'modal-confirm-delete-transaction\').remove()" style="flex:1;">Cancel</button>' +
       '</div>' +
     '</div>';
@@ -9621,9 +10132,11 @@ function renderReport() {
   const rc = document.getElementById('report-content');
   if (!rc) return;
 
-  const schoolTx = (data.transactions||[]).filter(function(t){
-    return !currentSchoolId || t.schoolId === currentSchoolId;
-  });
+  const schoolTx = Array.isArray(data.transactions)
+    ? data.transactions.filter(function(t){
+        return !currentSchoolId || t.schoolId === currentSchoolId;
+      })
+    : [];
 
   const schoolName = (function(){
     var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
@@ -9651,7 +10164,7 @@ function renderReport() {
       catMap[cat].count++;
     });
 
-    const recent = dayTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    const recent = dayTx.slice();
     const catRows = Object.keys(catMap).map(function(cat){
       var c = catMap[cat];
       var color = c.type==='income' ? 'var(--success)' : 'var(--danger)';
@@ -9727,7 +10240,7 @@ function renderReport() {
     });
 
     // Transaction rows for the selected month
-    const recent = monthTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+    const recent = monthTx.slice();
 
     const catRows = Object.keys(catMap).map(function(cat){
       var c = catMap[cat];
@@ -10282,17 +10795,30 @@ async function scheduleDLTest() {
     scheduledAt: new Date().toISOString()
   };
 
-  // Save to Firebase
+  // Save to Firebase with DataWriter
   let savedId = null;
   if (typeof db !== 'undefined' && currentSchoolId) {
     try {
-      const ref = await db.collection('schools').doc(currentSchoolId).collection('dlTests').add(testEntry);
-      savedId = ref.id;
-      testEntry.firebaseId = savedId;
-      testEntry.id = savedId;
+      const dlSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/dlTests', null, {
+        ...testEntry,
+        scheduledAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      
+      FGCache.invalidate(currentSchoolId, 'dlTests');
+      EnhancedCache.del(currentSchoolId, 'dlTests').catch(e => {});
+      
+      if (dlSuccess) {
+        showToast('✅ DL Test synced to Firebase');
+        // Generate temporary ID for UI
+        savedId = 'sync-' + Date.now();
+      } else {
+        showToast('⏳ DL Test queued for sync');
+        savedId = 'queue-' + Date.now();
+      }
     } catch(e) {
-      console.error('Failed to save DL test to Firebase:', e.message);
-      showToast('⚠ Saved locally — Firebase sync failed');
+      console.error('Failed to save DL test:', e.message);
+      showToast('⚠ Saved locally — will sync when online');
+      savedId = 'local-' + Date.now();
     }
   }
 
@@ -10320,10 +10846,14 @@ async function markDLTestResult(testId, result) {
   }
   if (typeof db !== 'undefined' && currentSchoolId && testId && !testId.startsWith('local-')) {
     try {
-      await db.collection('schools').doc(currentSchoolId).collection('dlTests').doc(testId).update({
+      const updateSuccess = await DataWriter.queueWrite('update', 'schools/' + currentSchoolId + '/dlTests', testId, {
         status: result,
         resultDate: new Date().toISOString().split('T')[0]
       });
+      
+      FGCache.invalidate(currentSchoolId, 'dlTests');
+      EnhancedCache.del(currentSchoolId, 'dlTests').catch(e => {});
+      
     } catch(e) { console.error('DL result update failed:', e.message); }
   }
   renderDLTests();
@@ -10336,7 +10866,9 @@ async function cancelDLTest(testId) {
   data.dlTests = (data.dlTests || []).filter(function(t){ return (t.firebaseId||t.id) !== testId; });
   if (typeof db !== 'undefined' && currentSchoolId && testId && !testId.startsWith('local-')) {
     try {
-      await db.collection('schools').doc(currentSchoolId).collection('dlTests').doc(testId).delete();
+      const deleteSuccess = await DataWriter.queueWrite('delete', 'schools/' + currentSchoolId + '/dlTests', testId, {});
+      FGCache.invalidate(currentSchoolId, 'dlTests');
+      EnhancedCache.del(currentSchoolId, 'dlTests').catch(e => {});
     } catch(e) { console.error('DL test cancel failed:', e.message); }
   }
   renderDLTests();
@@ -10810,16 +11342,25 @@ async function renderOwnerAttendance() {
         const adminAttendanceRef = db.collection('schools').doc(school.id).collection('adminAttendance');
         const instructorAttendanceRef = db.collection('schools').doc(school.id).collection('instructorAttendance');
 
-        // Get attendance data for each type
-        const studentAttendanceDoc = await studentAttendanceRef.doc(targetDate).get();
-        const staffAttendanceDoc = await staffAttendanceRef.doc(targetDate).get();
-        const adminAttendanceDoc = await adminAttendanceRef.doc(targetDate).get();
-        const instructorAttendanceDoc = await instructorAttendanceRef.doc(targetDate).get();
+        // Get attendance data for each type using cache-first retrieval to avoid repeated reads
+        const fetchAttendanceCached = async (ref, cacheKeySuffix) => {
+          const ck = 'attendance:' + targetDate + (cacheKeySuffix ? (':' + cacheKeySuffix) : '');
+          const cached = FGCache.get(school.id, ck);
+          if (cached) return cached;
+          try {
+            const doc = await FirebaseService.getDocument(ref, targetDate);
+            const data = doc || {};
+            FGCache.set(school.id, ck, data, FGCache.TTL_SHORT);
+            return data;
+          } catch(e) { return {}; }
+        };
 
-        const studentAttendance = studentAttendanceDoc.exists ? studentAttendanceDoc.data() : {};
-        const staffAttendance = staffAttendanceDoc.exists ? staffAttendanceDoc.data() : {};
-        const adminAttendance = adminAttendanceDoc.exists ? adminAttendanceDoc.data() : {};
-        const instructorAttendance = instructorAttendanceDoc.exists ? instructorAttendanceDoc.data() : {};
+        const [studentAttendance, staffAttendance, adminAttendance, instructorAttendance] = await Promise.all([
+          fetchAttendanceCached(studentAttendanceRef, 'students'),
+          fetchAttendanceCached(staffAttendanceRef, 'staff'),
+          fetchAttendanceCached(adminAttendanceRef, 'admins'),
+          fetchAttendanceCached(instructorAttendanceRef, 'instructors')
+        ]);
 
       // Skip students - only staff/instructors/admins mark attendance
         // Students no longer included in attendance management
@@ -12065,13 +12606,20 @@ async function saveNewVehicle() {
 
   try {
     if (currentSchoolId && db) {
-      const docRef = await db.collection('schools').doc(currentSchoolId).collection('vehicles').add({
+      const vehicleSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/vehicles', null, {
         ...vehicleData,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
-      vehicleData.id = docRef.id;
-      vehicleData.firebaseId = docRef.id;
+      vehicleData.id = 'veh-' + Date.now();
+      vehicleData.firebaseId = vehicleData.id;
       FGCache.invalidate(currentSchoolId, 'vehicles');
+      EnhancedCache.del(currentSchoolId, 'vehicles').catch(e => {});
+      
+      if (vehicleSuccess) {
+        addNotification('✅ Vehicle ' + name + ' synced to Firebase', 'success');
+      } else {
+        addNotification('⏳ Vehicle queued for sync', 'info');
+      }
     } else {
       vehicleData.id = 'local_' + Date.now();
     }
@@ -12526,9 +13074,27 @@ async function deleteStudent(id) {
   }
   const sid = String(id);
   try {
+    // Find the student record before deleting so we can get their auth uid
+    const studentRecord = data.students.find(function(s){ return String(s.firebaseId||s.id) === sid; });
+    const studentAuthUid = studentRecord ? (studentRecord.uid || studentRecord.authUid || null) : null;
+
+    // 1. Delete Firestore document
     if (typeof db !== 'undefined' && currentSchoolId) {
       await db.collection('schools').doc(currentSchoolId).collection('students').doc(sid).delete();
     }
+
+    // 2. Delete Firebase Auth account via Cloud Function (requires 'deleteAuthUser' callable function)
+    if (studentAuthUid && typeof firebaseFunctions !== 'undefined' && firebaseFunctions) {
+      try {
+        const deleteAuthUser = firebaseFunctions.httpsCallable('deleteAuthUser');
+        await deleteAuthUser({ uid: studentAuthUid });
+      } catch(authErr) {
+        // Non-fatal: log warning but continue — Auth deletion needs the Cloud Function deployed
+        console.warn('Could not delete Firebase Auth user (deleteAuthUser function may not be deployed):', authErr.message);
+      }
+    }
+
+    // 3. Remove from local data cache
     data.students = data.students.filter(function(s){ return String(s.firebaseId||s.id) !== sid; });
     document.getElementById('modal-confirm-delete-student')?.remove();
     document.getElementById('modal-student-detail')?.remove();
@@ -12856,7 +13422,9 @@ async function endClassTimer(studentId, studentName) {
   if (typeof db !== 'undefined' && currentSchoolId) {
     try {
       // Save session log
-      await db.collection('schools').doc(currentSchoolId).collection('classSessions').add(sessionRecord);
+      const addSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/classSessions', null, sessionRecord);
+      FGCache.invalidate(currentSchoolId, 'classSessions');
+      EnhancedCache.del(currentSchoolId, 'classSessions').catch(e => {});
 
       // Determine Firestore student doc id (prefer local student record mapping)
       const student = (data.students||[]).find(function(x) {
@@ -13005,7 +13573,7 @@ function openEditStudentModal(s) {
       </div>
     </div>
     <div style="margin-top:20px;display:flex;gap:10px;border-top:1px solid var(--border);padding-top:16px;">
-      <button class="btn btn-accent" onclick="saveEditStudent(${JSON.stringify(s.firebaseId||s.id)})" style="flex:1;">✓ Save Changes</button>
+      <button class="btn btn-accent" id="btn-save-edit-student" data-student-id="${(s.firebaseId||s.id||'').replace(/"/g,'&quot;')}" onclick="saveEditStudent(this.dataset.studentId)" style="flex:1;">✓ Save Changes</button>
       <button class="btn btn-outline" onclick="document.getElementById('modal-edit-student').remove()">Cancel</button>
     </div>
   </div>`;
@@ -13414,11 +13982,19 @@ async function saveAgent() {
   ensureAgentRegistered(name);
   if (currentSchoolId && typeof db !== 'undefined') {
     try {
-      await db.collection('schools').doc(currentSchoolId).collection('agents').add({
+      const agentSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/agents', null, {
         name: name,
         schoolId: currentSchoolId,
-        createdAt: new Date().toISOString()
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
+      FGCache.invalidate(currentSchoolId, 'agents');
+      EnhancedCache.del(currentSchoolId, 'agents').catch(e => {});
+      
+      if (agentSuccess) {
+        addNotification(`✅ Agent ${name} synced to Firebase`, 'success');
+      } else {
+        addNotification(`⏳ Agent ${name} queued for sync`, 'info');
+      }
     } catch (err) {
       console.warn('Could not persist agent to Firestore:', err.message || err);
     }
@@ -13490,9 +14066,11 @@ function renderFormsRegistry(formType) {
   const licenseNo     = school.licenseNo || school.license || '';
   const canEdit = currentRole === 'owner' || currentRole === 'office';
 
-  const allForms = (data.forms || []).filter(function(f) {
-    return f.formType === formType && (!currentSchoolId || f.schoolId === currentSchoolId);
-  });
+  const allForms = Array.isArray(data.forms)
+    ? data.forms.filter(function(f) {
+        return f.formType === formType && (!currentSchoolId || f.schoolId === currentSchoolId);
+      })
+    : [];
 
   function statusBadge(status) {
     const map = { 'Pending':'background:#fef3c7;color:#b45309', 'Submitted':'background:#dbeafe;color:#1d4ed8', 'Approved':'background:#dcfce7;color:#15803d', 'Rejected':'background:#fee2e2;color:#b91c1c' };
@@ -13799,6 +14377,7 @@ function printFormRecord(id, formTypeCode) {
   ${licenseNo ? '<div class="center subhead">Licence No. ' + licenseNo + '</div>' : ''}
   <div class="center" style="margin-top:10px;font-size:16px;font-weight:bold;">FORM - 14</div>
   <div class="center note">Register Showing the Enrollment to Trainee(s) in the Driving School Establishment</div>
+  ${f.photoDataUrl ? '<div style="text-align:center;margin:12px 0;"><img src="' + f.photoDataUrl + '" style="max-width:140px;max-height:180px;border:1px solid #000;padding:2px;"></div>' : ''}
 
   <table class="table">
     <tr><td class="label">1. Registration Year</td><td class="value">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td></tr>
@@ -14237,19 +14816,27 @@ async function updateOtherService(id) {
     form14Status:   document.getElementById('os-form14-status')?.value||'',
     form14Date:     document.getElementById('os-form14-date')?.value||'',
     formRemarks:    (document.getElementById('os-form-remarks')?.value||'').trim(),
-    updatedAt:      new Date().toISOString()
+    updatedAt:      firebase.firestore.FieldValue.serverTimestamp()
   };
 
   try {
     if (currentSchoolId && typeof db !== 'undefined') {
-      await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(id).update(updated);
+      const updateSuccess = await DataWriter.queueWrite('update', 'schools/' + currentSchoolId + '/otherServices', id, updated);
+      FGCache.invalidate(currentSchoolId, 'otherServices');
+      EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {});
+      
+      if (updateSuccess) {
+        showToast('Service record updated ✅ (synced to Firebase)');
+      } else {
+        showToast('Service record updated ⏳ (queued for sync)');
+      }
     } else {
       await db.collection('otherServices').doc(id).update(updated);
+      showToast('Service record updated ✅');
     }
     const idx = (data.otherServices||[]).findIndex(function(s){ return (s.firebaseId||s.id)===id; });
     if (idx >= 0) data.otherServices[idx] = Object.assign({}, data.otherServices[idx], updated);
     document.getElementById('modal-add-other-service')?.remove();
-    showToast('Service record updated ✅');
     renderOtherServices();
   } catch(e) {
     console.error('Update service error:', e);
@@ -14323,6 +14910,10 @@ function filterOtherServices(query) {
 function openAddOtherServiceModal() {
   const old = document.getElementById('modal-add-other-service');
   if (old) old.remove();
+  const today = new Date().toISOString().split('T')[0];
+  const storedServiceDate = localStorage.getItem('fg_other_service_date') || '';
+  const storedExpectedDate = localStorage.getItem('fg_other_service_expected_date') || '';
+  const serviceDateValue = storedServiceDate || today;
   const modal = document.createElement('div');
   modal.id = 'modal-add-other-service';
   modal.className = 'modal-overlay open';
@@ -14384,8 +14975,8 @@ function openAddOtherServiceModal() {
       <div class="form-group"><label>Payment Mode</label>
         <select id="os-payment-mode"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
       </div>
-      <div class="form-group"><label>Service Date</label><input type="date" id="os-date" value="${new Date().toISOString().split('T')[0]}"></div>
-      <div class="form-group"><label>Expected Completion</label><input type="date" id="os-expected-date"></div>
+      <div class="form-group"><label>Service Date</label><input type="date" id="os-date" value="${serviceDateValue}" onchange="localStorage.setItem('fg_other_service_date', this.value || '')"></div>
+      <div class="form-group"><label>Expected Completion</label><input type="date" id="os-expected-date" value="${storedExpectedDate}" onchange="localStorage.setItem('fg_other_service_expected_date', this.value || '')"></div>
     </div>
     <div id="os-balance-display" style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin-top:10px;display:none;">
       <div style="display:flex;justify-content:space-between;font-size:13px;">
@@ -14650,14 +15241,22 @@ async function saveOtherService() {
     schoolId: currentSchoolId,
     // Include ownerId and ownerEmail so Firestore isOwner() rule passes
     ...FirebaseService.getOwnerScope(currentSchoolId),
-    createdAt: new Date().toISOString()
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
   };
   try {
     if (agentName) ensureAgentRegistered(agentName);
     if (currentSchoolId && typeof db !== 'undefined') {
-      const ref = await db.collection('schools').doc(currentSchoolId).collection('otherServices').add(serviceData);
-      serviceData.id = ref.id;
-      serviceData.firebaseId = ref.id;
+      const serviceSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/otherServices', null, serviceData);
+      serviceData.id = 'srv-' + Date.now();
+      serviceData.firebaseId = serviceData.id;
+      FGCache.invalidate(currentSchoolId, 'otherServices');
+      EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {});
+      
+      if (serviceSuccess) {
+        addNotification(`✅ Service for ${clientName} synced to Firebase`, 'success');
+      } else {
+        addNotification(`⏳ Service queued for sync`, 'info');
+      }
     } else {
       serviceData.id = 'local-' + Date.now();
     }
@@ -15022,9 +15621,13 @@ function buildTrackingRows(students, date) {
   }).join('');
 }
 
-function renderStudentTrackingTable() {
+async function renderStudentTrackingTable() {
   const filter = document.getElementById('tracking-filter') ? document.getElementById('tracking-filter').value : 'all';
   const date = document.getElementById('tracking-date') ? document.getElementById('tracking-date').value : new Date().toISOString().split('T')[0];
+
+  // Load attendance for selected date if not already in memory (cache-aware)
+  await loadStudentAttendanceForTracking(date);
+
   let students = (data.students||[]).filter(function(s){ return !currentSchoolId || s.schoolId === currentSchoolId; });
 
   if (filter === 'completed') {
@@ -15053,9 +15656,22 @@ function renderStudentTrackingTable() {
 // Load today's student attendance records for tracking
 async function loadStudentAttendanceForTracking(date) {
   if (!currentSchoolId || typeof db === 'undefined') return;
+
+  // If we already have records for this date in memory, skip the Firestore read
+  const existing = data.studentAttendanceRecordsByDate && data.studentAttendanceRecordsByDate[date];
+  if (existing && Object.keys(existing).length > 0) {
+    console.log('loadStudentAttendanceForTracking: using cached records for', date);
+    return;
+  }
+
+  const localRecords = loadLocalAttendanceRecords(date);
+  if (localRecords && Object.keys(localRecords).length > 0) {
+    setAttendanceRecordsForDate(date, Object.values(localRecords));
+  }
+
   try {
-    const snap = await db.collection('schools').doc(currentSchoolId).collection('studentAttendance').where('date','==',date).get();
-    const records = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const attendanceDocs = await FirebaseService.getDocuments(db.collection('schools').doc(currentSchoolId).collection('studentAttendance').where('date','==',date), 'createdAt', 'desc', 'studentAttendance-' + date, FGCache.TTL_SHORT);
+    const records = (attendanceDocs||[]).map(d => ({ id: d.id, ...d }));
     setAttendanceRecordsForDate(date, records);
     const recordMap = {};
     records.forEach(rec => {
@@ -15063,7 +15679,17 @@ async function loadStudentAttendanceForTracking(date) {
       if (fid) recordMap[fid] = rec;
     });
     saveLocalAttendanceRecords(date, recordMap);
-  } catch(e) { console.warn('Could not load tracking attendance:', e.message); }
+  } catch (e) {
+    console.warn('Could not load tracking attendance:', e.message);
+    if (!localRecords || Object.keys(localRecords).length === 0) {
+      const existing = data.studentAttendanceRecordsByDate && data.studentAttendanceRecordsByDate[date];
+      if (existing) {
+        setAttendanceRecordsForDate(date, Object.values(existing));
+      } else {
+        setAttendanceRecordsForDate(date, []);
+      }
+    }
+  }
 }
 
 // ============================================================
@@ -15092,14 +15718,36 @@ function sendDailyIncomeExpenseSummary() {
   const totalIncome = todayTx.filter(t=>t.type==='income').reduce((a,t)=>a+(t.amount||0),0);
   const totalExpense = todayTx.filter(t=>t.type==='expense').reduce((a,t)=>a+(t.amount||0),0);
   const profit = totalIncome - totalExpense;
-  const msg = `📊 Daily Summary (${today}): Income ₹${totalIncome.toLocaleString()} | Expense ₹${totalExpense.toLocaleString()} | Net ${profit>=0?'+':''}₹${profit.toLocaleString()}`;
+
+  // Count number of classes scheduled for today
+  const scheduleEntries = Object.values(data.dailySchedule || {}).filter(function(item) {
+    return item && (!currentSchoolId || item.schoolId === currentSchoolId);
+  });
+  const classesCount = scheduleEntries.length;
+  const completedClassesCount = scheduleEntries.filter(function(item) {
+    const status = String(item.status || item.classStatus || '').toLowerCase();
+    return status === 'completed' || status === 'done' || status === 'complete' || status === 'finished';
+  }).length;
+
+  const countPresent = function(attMap) {
+    return Object.values(attMap || {}).filter(function(att) {
+      return att && (att.status === 'present' || att.status === 'late');
+    }).length;
+  };
+
+  const adminAttToday = data.adminAttendance && data.adminAttendance[today] ? data.adminAttendance[today] : {};
+  const instAttToday = data.instructorAttendance && data.instructorAttendance[today] ? data.instructorAttendance[today] : {};
+  const staffAttToday = data.staffAttendance && data.staffAttendance[today] ? data.staffAttendance[today] : {};
+  const staffPresentCount = countPresent(adminAttToday) + countPresent(instAttToday) + countPresent(staffAttToday);
+
+  const msg = `📊 Daily Summary (${today}): Income ₹${totalIncome.toLocaleString()} | Expense ₹${totalExpense.toLocaleString()} | Net ${profit>=0?'+':''}₹${profit.toLocaleString()} | Classes Scheduled: ${classesCount} | Classes Completed: ${completedClassesCount} | Staff Present: ${staffPresentCount}`;
   addNotification(msg, profit >= 0 ? 'success' : 'warning');
   // Show toast
   showToast(msg.substring(0, 80));
   // Also try browser notification
   if ('Notification' in window && Notification.permission === 'granted') {
     new Notification('First Gear Daily Summary', {
-      body: `Income: ₹${totalIncome.toLocaleString()} | Expense: ₹${totalExpense.toLocaleString()} | Net: ₹${profit.toLocaleString()}`,
+      body: `Income: ₹${totalIncome.toLocaleString()} | Expense: ₹${totalExpense.toLocaleString()} | Net: ₹${profit.toLocaleString()} | Classes Scheduled: ${classesCount} | Classes Completed: ${completedClassesCount} | Staff Present: ${staffPresentCount}`,
       icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="75" font-size="75">🚗</text></svg>'
     });
   }
@@ -15140,6 +15788,8 @@ async function quickSwitchSchool(schoolId) {
 // ============================================================
 async function loadOtherServices() {
   if (!currentSchoolId || typeof db === 'undefined') return;
+  // If loadInitialData already populated this, skip the duplicate Firestore read
+  if (data.otherServices && data.otherServices.length > 0) return;
   try {
     const snap = await db.collection('schools').doc(currentSchoolId).collection('otherServices').orderBy('createdAt','desc').get();
     data.otherServices = snap.docs.map(d=>({id:d.id,firebaseId:d.id,...d.data()}));
@@ -17284,7 +17934,7 @@ function openAddFormModal(formType, studentId) {
   updateFormTypeDisplay(_activeFormType);
   _showFormFields(_activeFormType);
   ['fm-serialNo','fm-candidateName','fm-phone','fm-address','fm-vehicleClass',
-   'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice',
+   'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice','fm-rtoOffice14',
    'fm-guardianName','fm-dob','fm-enrollDate','fm-endDate14',
    'fm-llNumber','fm-llValidity','fm-dlNumber','fm-dlValidFrom','fm-dlValidTo',
    'fm-llAppNumber','fm-llAppDob','fm-dlAppNumber','fm-dlAppDob',
@@ -17306,7 +17956,8 @@ function openAddFormModal(formType, studentId) {
 }
 
 function editFormRecord(id) {
-  var f = (data.forms||[]).find(function(x){ return (x.firebaseId||x.id)===id; });
+  var forms = Array.isArray(data.forms) ? data.forms : [];
+  var f = forms.find(function(x){ return (x.firebaseId||x.id)===id; });
   if (!f) { showToast('Record not found'); return; }
   if (!currentSchoolId && f.schoolId) {
     currentSchoolId = f.schoolId;
@@ -17347,6 +17998,8 @@ function editFormRecord(id) {
     set('fm-dlNumber',      f.dlNumber);
     set('fm-dlValidFrom',   f.dlValidFrom);
     set('fm-dlValidTo',     f.dlValidTo);
+    set('fm-rtoOffice14',   f.rtoOffice || f.licensingAuthority || '');
+    set('fm-remarks',       f.remarks);
     set('fm-llAppNumber',   f.llAppNumber);
     set('fm-llAppDob',      f.llAppDob);
     set('fm-dlAppNumber',   f.dlAppNumber);
@@ -17373,7 +18026,9 @@ async function deleteFormRecord(id) {
   var dbReady = (typeof db !== 'undefined' && db !== null);
   try {
     if (currentSchoolId && dbReady) { await db.collection('forms').doc(id).delete(); }
-    data.forms = (data.forms||[]).filter(function(f){ return (f.firebaseId||f.id)!==id; });
+    data.forms = Array.isArray(data.forms)
+      ? data.forms.filter(function(f){ return (f.firebaseId||f.id)!==id; })
+      : [];
     if (_activeFormType === 'Form 5' || _activeFormType === 'Form 14') {
       renderFormsRegistry(_activeFormType);
     } else if (_activeFormType === 'Form 15') {
@@ -17403,6 +18058,7 @@ async function saveFormRecord() {
     return;
   }
 
+  var forms = Array.isArray(data.forms) ? data.forms : [];
   var record = {
     formType:      _activeFormType,
     schoolId:      selectedSchoolId,
@@ -17430,6 +18086,7 @@ async function saveFormRecord() {
     record.dob           = get('fm-dob');
     record.enrollDate    = get('fm-enrollDate');
     record.endDate       = get('fm-endDate14');
+    record.rtoOffice     = get('fm-rtoOffice14') || get('fm-rtoOffice') || '';
     record.llNumber      = get('fm-llNumber');
     record.llValidity    = get('fm-llValidity');
     record.dlNumber      = get('fm-dlNumber');
@@ -17443,7 +18100,7 @@ async function saveFormRecord() {
     if (_formPhotoDataURL) {
       record.photoDataUrl = _formPhotoDataURL;
     } else if (_editingFormId) {
-      var existingForm = (data.forms || []).find(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
+      var existingForm = forms.find(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
       if (existingForm && existingForm.photoDataUrl) record.photoDataUrl = existingForm.photoDataUrl;
     }
   }
@@ -17451,8 +18108,11 @@ async function saveFormRecord() {
   try {
     if (_editingFormId) {
       if (selectedSchoolId && dbReady) { await db.collection('forms').doc(_editingFormId).update(record); }
-      var idx = (data.forms||[]).findIndex(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
-      if (idx !== -1) data.forms[idx] = Object.assign({}, data.forms[idx], record);
+      var idx = forms.findIndex(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
+      if (idx !== -1) {
+        forms[idx] = Object.assign({}, forms[idx], record);
+        data.forms = forms;
+      }
       addNotification(_activeFormType + ' record updated', 'success');
     } else {
       record.createdAt = new Date().toISOString();
@@ -17463,7 +18123,7 @@ async function saveFormRecord() {
       }
       record.firebaseId = newId;
       record.id = newId;
-      if (!data.forms) data.forms = [];
+      data.forms = forms;
       data.forms.push(record);
       addNotification(_activeFormType + ' record added', 'success');
     }
@@ -17689,7 +18349,7 @@ function populateFormFromStudentId(value) {
         </div>
         <div class="form-group">
           <label>Licensing Authority</label>
-          <input type="text" id="fm-rtoOffice" placeholder="RTO / licensing authority">
+          <input type="text" id="fm-rtoOffice14" placeholder="RTO / licensing authority">
         </div>
         <div class="form-group full">
           <label>Upload Trainee Photo</label>
