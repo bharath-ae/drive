@@ -10390,6 +10390,77 @@ function getReportDescription(tx) {
   return tx.description || tx.desc || tx.note || tx.details || tx.narration || tx.particulars || tx.notes || '';
 }
 
+// Build a category-wise breakdown (rows) for a single-type list of transactions (all income OR all expense)
+function buildReportCatRows(txList, color) {
+  const catMap = {};
+  txList.forEach(function(t){
+    var cat = t.category || 'Other';
+    if (!catMap[cat]) catMap[cat] = {total:0, count:0};
+    catMap[cat].total += (t.amount||0);
+    catMap[cat].count++;
+  });
+  const cats = Object.keys(catMap);
+  if (!cats.length) return '';
+  return cats.map(function(cat){
+    var c = catMap[cat];
+    return '<div class="report-row">' +
+      '<span>' + cat + ' <span style="font-size:11px;color:var(--text3);">(' + c.count + ' entries)</span></span>' +
+      '<span style="color:' + color + ';font-weight:600;">₹' + c.total.toLocaleString() + '</span>' +
+    '</div>';
+  }).join('');
+}
+
+// Build an entries table in the same shape used to add a cash entry: Date, Category, Description, Amount
+function buildReportEntryTable(txList, color) {
+  if (!txList.length) return '';
+  var sorted = txList.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+  return '<table class="data-table" style="margin-top:8px;">' +
+    '<thead><tr><th>Date</th><th>Category</th><th>Description</th><th style="text-align:right">Amount</th></tr></thead>' +
+    '<tbody>' +
+    sorted.map(function(t){
+      return '<tr>' +
+        '<td style="font-size:12px;">' + (t.date||'—') + '</td>' +
+        '<td style="font-size:12px;">' + (t.category||'—') + '</td>' +
+        '<td>' + (getReportDescription(t) || '—') + '</td>' +
+        '<td style="text-align:right;color:' + color + ';font-weight:600;">₹' + (t.amount||0).toLocaleString() + '</td>' +
+      '</tr>';
+    }).join('') +
+    '</tbody></table>';
+}
+
+// Render a full Income / Expense block (category breakdown + entries) for a given list of transactions
+function buildIncomeExpenseSections(txList, noDataLabel) {
+  const incomeTx  = txList.filter(function(t){ return t.type==='income'; });
+  const expenseTx = txList.filter(function(t){ return t.type==='expense'; });
+
+  const incomeCatRows  = buildReportCatRows(incomeTx, 'var(--success)') ||
+    '<div style="color:var(--text3);padding:12px 0;text-align:center;">No income ' + noDataLabel + '.</div>';
+  const expenseCatRows = buildReportCatRows(expenseTx, 'var(--danger)') ||
+    '<div style="color:var(--text3);padding:12px 0;text-align:center;">No expense ' + noDataLabel + '.</div>';
+
+  const incomeTable  = buildReportEntryTable(incomeTx, 'var(--success)');
+  const expenseTable = buildReportEntryTable(expenseTx, 'var(--danger)');
+
+  return (
+    '<div class="report-body" style="border-left:3px solid var(--success);">' +
+      '<div style="font-size:13px;font-weight:700;color:var(--success);margin-bottom:10px;">💚 Income — by Category</div>' +
+      incomeCatRows +
+    '</div>' +
+    (incomeTable ? '<div class="report-body" style="margin-top:14px;border-left:3px solid var(--success);">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Income Entries</div>' +
+      incomeTable +
+    '</div>' : '') +
+    '<div class="report-body" style="margin-top:18px;border-left:3px solid var(--danger);">' +
+      '<div style="font-size:13px;font-weight:700;color:var(--danger);margin-bottom:10px;">❤️ Expense — by Category</div>' +
+      expenseCatRows +
+    '</div>' +
+    (expenseTable ? '<div class="report-body" style="margin-top:14px;border-left:3px solid var(--danger);">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Expense Entries</div>' +
+      expenseTable +
+    '</div>' : '')
+  );
+}
+
 function renderReport() {
   const period = document.getElementById('report-period')?.value || 'monthly';
   const rc = document.getElementById('report-content');
@@ -10417,39 +10488,7 @@ function renderReport() {
     const expense = dayTx.filter(function(t){ return t.type==='expense'; }).reduce(function(s,t){ return s+(t.amount||0); },0);
     const profit  = income - expense;
 
-    const catMap = {};
-    dayTx.forEach(function(t){
-      var cat = t.category || (t.type==='income' ? 'Income' : 'Expense');
-      if (!catMap[cat]) catMap[cat] = {type:t.type, total:0, count:0};
-      catMap[cat].total += (t.amount||0);
-      catMap[cat].count++;
-    });
-
-    const recent = dayTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
-    const catRows = Object.keys(catMap).map(function(cat){
-      var c = catMap[cat];
-      var color = c.type==='income' ? 'var(--success)' : 'var(--danger)';
-      return '<div class="report-row">' +
-        '<span>' + cat + ' <span style="font-size:11px;color:var(--text3);">(' + c.count + ' entries)</span></span>' +
-        '<span style="color:' + color + ';font-weight:600;">₹' + c.total.toLocaleString() + '</span>' +
-      '</div>';
-    }).join('') || '<div style="color:var(--text3);padding:12px 0;text-align:center;">No transactions for this day.</div>';
-
-    const txRows = recent.length === 0 ? '' :
-      '<table class="data-table" style="margin-top:8px;">' +
-        '<thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th style="text-align:right">Amount</th></tr></thead>' +
-        '<tbody>' +
-        recent.map(function(t){
-          var color = t.type==='income' ? 'var(--success)' : 'var(--danger)';
-          return '<tr>' +
-            '<td style="font-size:12px;">' + (t.date||'—') + '</td>' +
-            '<td>' + (getReportDescription(t) || '—') + '</td>' +
-            '<td style="font-size:12px;">' + (t.category||'—') + '</td>' +
-            '<td><span class="badge ' + (t.type==='income'?'badge-green':'badge-red') + '">' + (t.type||'—') + '</span></td>' +
-            '<td style="text-align:right;color:' + color + ';font-weight:600;">₹' + (t.amount||0).toLocaleString() + '</td>' +
-          '</tr>';
-        }).join('') +
-        '</tbody></table>';
+    const incomeExpenseHtml = buildIncomeExpenseSections(dayTx, 'entries for this day');
 
     rc.innerHTML =
       '<div class="report-section">' +
@@ -10471,11 +10510,7 @@ function renderReport() {
             '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:' + (profit>=0?'var(--accent2)':'var(--danger)') + ';margin-top:6px;">₹' + profit.toLocaleString() + '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="report-body">' +
-          '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Category Breakdown</div>' +
-          catRows +
-        '</div>' +
-        (txRows ? '<div class="report-body" style="margin-top:18px;"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">All Transactions for the day</div>' + txRows + '</div>' : '') +
+        incomeExpenseHtml +
       '</div>';
     return;
   }
@@ -10492,41 +10527,7 @@ function renderReport() {
     const profit  = income - expense;
 
     // Group by category for breakdown
-    const catMap = {};
-    monthTx.forEach(function(t){
-      var cat = t.category || (t.type==='income' ? 'Income' : 'Expense');
-      if (!catMap[cat]) catMap[cat] = {type:t.type, total:0, count:0};
-      catMap[cat].total += (t.amount||0);
-      catMap[cat].count++;
-    });
-
-    // Transaction rows for the selected month
-    const recent = monthTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
-
-    const catRows = Object.keys(catMap).map(function(cat){
-      var c = catMap[cat];
-      var color = c.type==='income' ? 'var(--success)' : 'var(--danger)';
-      return '<div class="report-row">' +
-        '<span>' + cat + ' <span style="font-size:11px;color:var(--text3);">(' + c.count + ' entries)</span></span>' +
-        '<span style="color:' + color + ';font-weight:600;">₹' + c.total.toLocaleString() + '</span>' +
-      '</div>';
-    }).join('') || '<div style="color:var(--text3);padding:12px 0;text-align:center;">No transactions for this month.</div>';
-
-    const txRows = recent.length === 0 ? '' :
-      '<table class="data-table" style="margin-top:8px;">' +
-        '<thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th style="text-align:right">Amount</th></tr></thead>' +
-        '<tbody>' +
-        recent.map(function(t){
-          var color = t.type==='income' ? 'var(--success)' : 'var(--danger)';
-          return '<tr>' +
-            '<td style="font-size:12px;">' + (t.date||'—') + '</td>' +
-            '<td>' + (getReportDescription(t) || '—') + '</td>' +
-            '<td style="font-size:12px;">' + (t.category||'—') + '</td>' +
-            '<td><span class="badge ' + (t.type==='income'?'badge-green':'badge-red') + '">' + (t.type||'—') + '</span></td>' +
-            '<td style="text-align:right;color:' + color + ';font-weight:600;">₹' + (t.amount||0).toLocaleString() + '</td>' +
-          '</tr>';
-        }).join('') +
-        '</tbody></table>';
+    const incomeExpenseHtml = buildIncomeExpenseSections(monthTx, 'entries for this month');
 
     rc.innerHTML =
       '<div class="report-section">' +
@@ -10548,11 +10549,7 @@ function renderReport() {
             '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:' + (profit>=0?'var(--accent2)':'var(--danger)') + ';margin-top:6px;">₹' + profit.toLocaleString() + '</div>' +
           '</div>' +
         '</div>' +
-        '<div class="report-body">' +
-          '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Category Breakdown</div>' +
-          catRows +
-        '</div>' +
-        (txRows ? '<div class="report-body" style="margin-top:18px;"><div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">All Transactions for the month</div>' + txRows + '</div>' : '') +
+        incomeExpenseHtml +
       '</div>';
     return;
   }
@@ -10598,17 +10595,25 @@ function renderReport() {
     '</tr>';
   }).join('');
 
-  const monthRows = monthData.map(function(m){
-    var hasData = m.income > 0 || m.expense > 0;
+  const incomeMonthRows = monthData.map(function(m){
+    var hasData = m.income > 0;
     return '<div class="report-row" style="' + (!hasData?'opacity:.45':'') + '">' +
       '<span style="min-width:100px;">' + m.mon + '</span>' +
-      '<div style="display:flex;gap:20px;font-size:13px;flex-wrap:wrap;">' +
-        '<span style="color:var(--success);">Income: ₹' + m.income.toLocaleString() + '</span>' +
-        '<span style="color:var(--danger);">Expense: ₹' + m.expense.toLocaleString() + '</span>' +
-        '<span style="color:' + (m.profit>=0?'var(--accent2)':'var(--danger)') + ';font-weight:600;">Profit: ₹' + m.profit.toLocaleString() + '</span>' +
-      '</div>' +
+      '<span style="color:var(--success);font-weight:600;">₹' + m.income.toLocaleString() + '</span>' +
     '</div>';
   }).join('');
+
+  const expenseMonthRows = monthData.map(function(m){
+    var hasData = m.expense > 0;
+    return '<div class="report-row" style="' + (!hasData?'opacity:.45':'') + '">' +
+      '<span style="min-width:100px;">' + m.mon + '</span>' +
+      '<span style="color:var(--danger);font-weight:600;">₹' + m.expense.toLocaleString() + '</span>' +
+    '</div>';
+  }).join('');
+
+  // Full year transactions, split into Income / Expense category breakdown + entries (same shape as Add Cash Entry)
+  const yearTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selYear); });
+  const yearIncomeExpenseHtml = buildIncomeExpenseSections(yearTx, 'entries for ' + selYear);
 
   rc.innerHTML =
     '<div class="report-section">' +
@@ -10630,18 +10635,23 @@ function renderReport() {
           '<div style="font-size:26px;font-family:Syne,sans-serif;font-weight:700;color:' + ((totalIncome-totalExpense)>=0?'var(--accent2)':'var(--danger)') + ';margin-top:6px;">₹' + (totalIncome-totalExpense).toLocaleString() + '</div>' +
         '</div>' +
       '</div>' +
-      '<div class="report-body">' +
-        '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Month-by-Month Breakdown — ' + selYear + '</div>' +
-        monthRows +
+      '<div class="report-body" style="border-left:3px solid var(--success);">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--success);margin-bottom:10px;">💚 Income — Month-by-Month — ' + selYear + '</div>' +
+        incomeMonthRows +
         '<div class="report-total">' +
-          '<span>Annual Total</span>' +
-          '<div style="display:flex;gap:20px;">' +
-            '<span style="color:var(--success);">₹' + totalIncome.toLocaleString() + '</span>' +
-            '<span style="color:var(--danger);">₹' + totalExpense.toLocaleString() + '</span>' +
-            '<span style="color:var(--accent2);font-weight:700;">₹' + (totalIncome-totalExpense).toLocaleString() + '</span>' +
-          '</div>' +
+          '<span>Annual Income</span>' +
+          '<span style="color:var(--success);">₹' + totalIncome.toLocaleString() + '</span>' +
         '</div>' +
       '</div>' +
+      '<div class="report-body" style="margin-top:18px;border-left:3px solid var(--danger);">' +
+        '<div style="font-size:13px;font-weight:700;color:var(--danger);margin-bottom:10px;">❤️ Expense — Month-by-Month — ' + selYear + '</div>' +
+        expenseMonthRows +
+        '<div class="report-total">' +
+          '<span>Annual Expense</span>' +
+          '<span style="color:var(--danger);">₹' + totalExpense.toLocaleString() + '</span>' +
+        '</div>' +
+      '</div>' +
+      yearIncomeExpenseHtml +
       '<div class="report-body" style="margin-top:18px;">' +
         '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;">Multi-Year Summary</div>' +
         '<table class="data-table"><thead><tr><th>Year</th><th>Income</th><th>Expense</th><th>Net Profit</th></tr></thead>' +
@@ -10761,23 +10771,28 @@ function exportReportExcel() {
     rows.push(['Net Profit', income - expense]);
     rows.push([]);
 
-    // All transactions
-    rows.push(['TRANSACTIONS']);
-    rows.push(['Date', 'Description', 'Category', 'Type', 'Amount (₹)']);
-    var sorted = monthTx.slice().sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
-    sorted.forEach(function(t){
-      rows.push([
-        t.date || '',
-        getReportDescription(t),
-        t.category || '',
-        t.type || '',
-        t.amount || 0
-      ]);
+    // Income entries (same fields used when adding a cash entry)
+    rows.push(['INCOME ENTRIES']);
+    rows.push(['Date', 'Category', 'Description', 'Amount (₹)']);
+    var incomeSorted = monthTx.filter(function(t){ return t.type==='income'; })
+                               .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    incomeSorted.forEach(function(t){
+      rows.push([t.date || '', t.category || '', getReportDescription(t), t.amount || 0]);
     });
+    rows.push(['', '', 'Total Income', income]);
     rows.push([]);
-    rows.push(['', '', '', 'Total Income', income]);
-    rows.push(['', '', '', 'Total Expense', expense]);
-    rows.push(['', '', '', 'Net Profit', income - expense]);
+
+    // Expense entries
+    rows.push(['EXPENSE ENTRIES']);
+    rows.push(['Date', 'Category', 'Description', 'Amount (₹)']);
+    var expenseSorted = monthTx.filter(function(t){ return t.type==='expense'; })
+                                .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    expenseSorted.forEach(function(t){
+      rows.push([t.date || '', t.category || '', getReportDescription(t), t.amount || 0]);
+    });
+    rows.push(['', '', 'Total Expense', expense]);
+    rows.push([]);
+    rows.push(['', '', 'Net Profit', income - expense]);
 
   } else if (period === 'daily') {
     const selDate = (df && df.value) ? df.value : new Date().toISOString().slice(0,10);
@@ -10796,16 +10811,26 @@ function exportReportExcel() {
     rows.push(['Total Expense', expense]);
     rows.push(['Net Profit', income - expense]);
     rows.push([]);
-    rows.push(['TRANSACTIONS']);
-    rows.push(['Date', 'Description', 'Category', 'Type', 'Amount (₹)']);
-    var sortedDay = dayTx.slice().sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
-    sortedDay.forEach(function(t){
-      rows.push([t.date||'', getReportDescription(t), t.category||'', t.type||'', t.amount||0]);
+    rows.push(['INCOME ENTRIES']);
+    rows.push(['Date', 'Category', 'Description', 'Amount (₹)']);
+    var incomeSortedDay = dayTx.filter(function(t){ return t.type==='income'; })
+                                .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    incomeSortedDay.forEach(function(t){
+      rows.push([t.date||'', t.category||'', getReportDescription(t), t.amount||0]);
     });
+    rows.push(['', '', 'Total Income', income]);
     rows.push([]);
-    rows.push(['', '', '', 'Total Income', income]);
-    rows.push(['', '', '', 'Total Expense', expense]);
-    rows.push(['', '', '', 'Net Profit', income - expense]);
+
+    rows.push(['EXPENSE ENTRIES']);
+    rows.push(['Date', 'Category', 'Description', 'Amount (₹)']);
+    var expenseSortedDay = dayTx.filter(function(t){ return t.type==='expense'; })
+                                 .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    expenseSortedDay.forEach(function(t){
+      rows.push([t.date||'', t.category||'', getReportDescription(t), t.amount||0]);
+    });
+    rows.push(['', '', 'Total Expense', expense]);
+    rows.push([]);
+    rows.push(['', '', 'Net Profit', income - expense]);
   } else {
     const selYear = (yf && yf.value) ? yf.value : String(new Date().getFullYear());
     filename = 'Report_Yearly_' + selYear;
@@ -10846,14 +10871,29 @@ function exportReportExcel() {
     });
     rows.push([]);
 
-    // All transactions for that year
-    rows.push(['ALL TRANSACTIONS — ' + selYear]);
-    rows.push(['Date', 'Description', 'Category', 'Type', 'Amount (₹)']);
-    var yearTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selYear); })
-                         .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
-    yearTx.forEach(function(t){
-      rows.push([t.date||'', getReportDescription(t), t.category||'', t.type||'', t.amount||0]);
+    // Income entries for the year
+    rows.push(['INCOME ENTRIES — ' + selYear]);
+    rows.push(['Date', 'Category', 'Description', 'Amount (₹)']);
+    var yearTx = schoolTx.filter(function(t){ return (t.date||'').startsWith(selYear); });
+    var yearIncomeSorted = yearTx.filter(function(t){ return t.type==='income'; })
+                                  .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    yearIncomeSorted.forEach(function(t){
+      rows.push([t.date||'', t.category||'', getReportDescription(t), t.amount||0]);
     });
+    rows.push(['', '', 'Total Income', totalInc]);
+    rows.push([]);
+
+    // Expense entries for the year
+    rows.push(['EXPENSE ENTRIES — ' + selYear]);
+    rows.push(['Date', 'Category', 'Description', 'Amount (₹)']);
+    var yearExpenseSorted = yearTx.filter(function(t){ return t.type==='expense'; })
+                                   .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+    yearExpenseSorted.forEach(function(t){
+      rows.push([t.date||'', t.category||'', getReportDescription(t), t.amount||0]);
+    });
+    rows.push(['', '', 'Total Expense', totalExp]);
+    rows.push([]);
+    rows.push(['', '', 'Net Profit', totalInc - totalExp]);
   }
 
   // Convert rows to CSV
