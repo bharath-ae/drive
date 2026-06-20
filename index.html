@@ -873,9 +873,10 @@
         <div class="cf-summary" id="cf-summary"></div>
         <div class="card">
           <div class="card-title">Transactions
-            <div style="display:flex;gap:8px;">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <input type="month" id="cf-month-filter" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:12px;" onchange="renderCashflow()">
               <button class="btn btn-outline btn-sm" onclick="printReport()">🖨 Report</button>
+              <button class="btn btn-outline btn-sm" onclick="previewOrphanedFees()" style="color:#dc2626;border-color:#dc2626;" title="Find and delete fee records for deleted students">🧹 Clean Orphaned Fees</button>
             </div>
           </div>
           <table class="data-table">
@@ -1629,6 +1630,8 @@
           <div class="stat-card blue"><div class="sc-label">Total Absent</div><div class="sc-value" style="color:var(--accent2)" id="owner-total-absent">0</div><div class="sc-sub">Staff & Instructors</div></div>
           <div class="stat-card green"><div class="sc-label">Instructors Present</div><div class="sc-value" style="color:var(--success)" id="owner-students-present">0</div><div class="sc-sub">Today</div></div>
           <div class="stat-card"><div class="sc-label">Staff Present</div><div class="sc-value" id="owner-staff-present">0</div><div class="sc-sub">Today</div></div>
+          <div class="stat-card blue"><div class="sc-label">Classes Today</div><div class="sc-value" style="color:var(--accent2)" id="owner-classes-today">0</div><div class="sc-sub">Sessions conducted</div></div>
+          <div class="stat-card green"><div class="sc-label">Total Classes</div><div class="sc-value" style="color:var(--success)" id="owner-classes-total">0</div><div class="sc-sub">All time conducted</div></div>
         </div>
 
         <!-- Attendance by User Type -->
@@ -1800,7 +1803,15 @@
     <div id="stab-course" style="display:none;">
       <div class="form-grid">
         <div class="form-group"><label>Vehicle Type *</label>
-          <select id="qs-vehicle"><option>2-Wheeler (Gear)</option><option>2-Wheeler (Gearless)</option><option>4-Wheeler (LMV)</option><option>Both 2W + 4W</option><option>Heavy</option><option>LMV Badge</option><option>Trans Badge (PSV)</option></select>
+          <select id="qs-vehicle" onchange="toggleDLFieldsVisibility('qs-vehicle','qs-dl-section')"><option>2-Wheeler (Gear)</option><option>2-Wheeler (Gearless)</option><option>4-Wheeler (LMV)</option><option>Both 2W + 4W</option><option>Heavy</option><option>LMV Badge</option><option>Trans Badge (PSV)</option></select>
+        </div>
+        <!-- DL fields — shown only when Heavy / LMV Badge / Trans Badge selected -->
+        <div class="form-group full" id="qs-dl-section" style="display:none;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;">
+          <div style="font-weight:600;font-size:13px;color:#92400e;margin-bottom:10px;">🪪 Driving Licence Required for this Vehicle Type</div>
+          <div class="form-grid">
+            <div class="form-group"><label>DL Number *</label><input type="text" id="qs-dl-number" placeholder="e.g. KA01 20200012345" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()"></div>
+            <div class="form-group"><label>DL Expiry Date *</label><input type="date" id="qs-dl-expiry"></div>
+          </div>
         </div>
         <div class="form-group"><label>Assign Instructor (optional)</label>
           <select id="qs-instructor"><option value="">-- Select Instructor --</option></select>
@@ -2286,7 +2297,7 @@
         <input type="tel" id="staff-phone" placeholder="Phone number">
       </div>
       <div class="form-group"><label>Role</label>
-        <select id="staff-role">
+        <select id="staff-role" onchange="toggleStaffOtherStudentsPerm()">
           <option value="instructor">Instructor</option>
           <option value="office">Office Staff</option>
           <option value="admin">Administrator</option>
@@ -2358,6 +2369,13 @@
             <div>
               <div style="font-weight:600;color:#374151;font-size:13px;">📋 Dashboard Overview</div>
               <div style="font-size:11px;color:#6b7280;">See dashboard summaries</div>
+            </div>
+          </label>
+          <label id="staff-perm-other-students-wrap" style="display:none;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;grid-column:1 / -1;">
+            <input type="checkbox" id="staff-perm-other-students" style="margin:0;">
+            <div>
+              <div style="font-weight:600;color:#374151;font-size:13px;">🔄 Pick Students From Other Classes</div>
+              <div style="font-size:11px;color:#6b7280;">Allow this instructor to give training to students assigned to other instructors (Other Students page)</div>
             </div>
           </label>
         </div>
@@ -2633,8 +2651,8 @@
           // Update local attendance history
           await renderSelfAttHistory();
 
-          // If current user is an admin or instructor, open schedule page after self-attendance
-          if (currentRole === 'office' || currentRole === 'admin' || currentRole === 'instructor') {
+          // If current user is an admin/office user, open schedule page after self-attendance
+          if (currentRole === 'office' || currentRole === 'admin') {
             try {
               navigateTo && typeof navigateTo === 'function' ? navigateTo('class-schedule') : openModal('modal-bulk-schedule');
               if (typeof renderSchedule === 'function') renderSchedule();
@@ -3434,7 +3452,7 @@ function renderInstructorStudents() {
   }
 
   const myStudents = allStudents.filter(isMyStudent);
-  const activeSession = loadActiveOtherClassSession();
+  const allActiveSessions = getAllActiveSessions();
 
   if (myStudents.length === 0) {
     list.innerHTML =
@@ -3458,7 +3476,7 @@ function renderInstructorStudents() {
     const feeLeft = (s.totalFee || 0) - (s.paid || 0);
     const displayId = s.studentId || (sid ? 'FG-' + String(sid).slice(-6).toUpperCase() : '—');
 
-    const actionButtons = (activeSession && String(activeSession.studentId) === String(sid))
+    const actionButtons = getActiveSessionForStudent(sid)
       ? ('<button class="btn btn-accent btn-sm" style="flex:1;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">Open Active Class</button>' +
          '<button class="btn btn-danger btn-sm" onclick="endClassTimer(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">End Class</button>')
       : ('<button class="btn btn-outline btn-sm" style="flex:1;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">Start Class</button>');
@@ -3490,7 +3508,21 @@ function renderInstructorStudents() {
     '</div>';
   });
 
-  list.innerHTML = '<div class="two-col">' + rows.join('') + '</div>';
+  const activeBanner = allActiveSessions.length > 0
+    ? ('<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">' +
+        '<div style="font-size:13px;color:#9a3412;">' +
+          '<strong>&#x23F1; ' + allActiveSessions.length + ' class' + (allActiveSessions.length===1?'':'es') + ' in progress:</strong> ' +
+          allActiveSessions.map(function(sess) {
+            return '<a href="javascript:void(0)" onclick="openOtherStudentClassModal(\'' + sess.studentId + '\',\'' + (sess.studentName||'').replace(/'/g,"\\'") + '\')" style="color:#9a3412;text-decoration:underline;margin-right:8px;">' +
+              sess.studentName + ' (since ' + new Date(sess.startTime).toLocaleTimeString('en-IN') + ')' +
+            '</a>';
+          }).join('') +
+        '</div>' +
+        '<button class="btn btn-danger btn-sm" onclick="endAllActiveSessions()">&#x23F9; End All Classes</button>' +
+      '</div>')
+    : '';
+
+  list.innerHTML = activeBanner + '<div class="two-col">' + rows.join('') + '</div>';
 }
 
   // Also include students scheduled for this instructor today (even if record not assigned)
@@ -5963,7 +5995,6 @@ const navConfig = {
       {id:'dashboard',icon:'&#128202;',label:'Dashboard'},
       {id:'my-students',icon:'&#128100;',label:'My Students'},
       {id:'other-students',icon:'&#128101;',label:'Other Students'},
-      {id:'class-schedule',icon:'&#128197;',label:'Class Schedule'},
       {id:'attendance',icon:'&#9989;',label:'Attendance'},
     ]},
     {section:'Vehicle', items:[
@@ -6155,11 +6186,12 @@ function hasPageAccess(pageId) {
       'data-import'
     ],
     instructor: [
-      'dashboard', 'my-students', 'other-students', 'class-schedule', 'attendance', 'petrol'
+      'dashboard', 'my-students', 'other-students', 'attendance', 'petrol'
     ]
   };
   
-  return rolePermissions[currentRole].includes(pageId);
+  return rolePermissions[currentRole].includes(pageId)
+    && (pageId !== 'other-students' || canPickOtherStudents());
 }
 
 // Check owner subscription and show renewal message if needed
@@ -6424,8 +6456,15 @@ function hasActionPermission(action, data = {}) {
     case 'manage_users':
       return currentRole === 'owner';
     
-    case 'add_student':
-      return currentRole === 'owner' || currentRole === 'office';
+    case 'add_student': {
+      if (currentRole === 'owner') return true;
+      // office/admin can add students only if the owner has enabled it for this school
+      if (currentRole === 'office' || currentRole === 'admin') {
+        const sch = (userSchools || []).find(s => s.id === currentSchoolId);
+        return !!(sch && sch.staffCanAddStudent);
+      }
+      return false;
+    }
     
     case 'edit_student':
       if (currentRole === 'owner' || currentRole === 'office') return true;
@@ -6818,6 +6857,7 @@ function buildNav() {
     sec.className = 'nav-section';
     sec.innerHTML = `<div class="nav-section-title">${section.section}</div>`;
     section.items.forEach(item => {
+      if (item.id === 'other-students' && !canPickOtherStudents()) return;
       const el = document.createElement('div');
       el.className = 'nav-item';
       el.id = 'nav-'+item.id;
@@ -7782,6 +7822,20 @@ function openEditSchoolModal(schoolId) {
           </div>
         </div>
       </div>
+      <div class="form-group full" style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px;">
+        <div style="font-weight:600;font-size:13px;color:var(--primary);margin-bottom:12px;">🔐 Staff Permissions</div>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;user-select:none;">
+          <div style="position:relative;width:44px;height:24px;flex-shrink:0;">
+            <input type="checkbox" id="esc-staff-add-student" ${school.staffCanAddStudent ? 'checked' : ''} style="opacity:0;width:0;height:0;position:absolute;" onchange="document.getElementById('esc-staff-add-student-track').style.background=this.checked?'var(--success)':'var(--border)';document.getElementById('esc-staff-add-student-thumb').style.left=this.checked?'22px':'2px';">
+            <div id="esc-staff-add-student-track" style="position:absolute;inset:0;border-radius:24px;background:${school.staffCanAddStudent ? 'var(--success)' : 'var(--border)'};transition:background 0.2s;"></div>
+            <div id="esc-staff-add-student-thumb" style="position:absolute;top:2px;left:${school.staffCanAddStudent ? '22px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,0.2);transition:left 0.2s;pointer-events:none;"></div>
+          </div>
+          <div>
+            <div style="font-size:13px;font-weight:500;color:var(--text);">Allow staff (office/admin) to add students</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:2px;">When OFF, only the owner can enroll new students.</div>
+          </div>
+        </label>
+      </div>
       <div class="form-group full">
         <label>Principal Signature / Stamp Image</label>
         <p style="font-size:11px;color:var(--text2);margin-bottom:6px;">Upload a PNG/JPG of the signature or stamp — it will appear on printed Form 5, 14, and 15.</p>
@@ -7825,6 +7879,9 @@ async function saveSchoolDetails() {
 
   try {
     const updates = { name, address, phone, licenseNo, license: licenseNo, principal, website, updatedAt: new Date().toISOString() };
+    
+    // Staff permissions
+    updates.staffCanAddStudent = document.getElementById('esc-staff-add-student')?.checked === true;
     
     // Add latitude and longitude if provided
     if (latitude) updates.latitude = parseFloat(latitude);
@@ -9001,6 +9058,29 @@ function openAddStudentModal() {
   openModal('modal-add-student');
 }
 
+// Vehicles that require a pre-existing Driving Licence
+const DL_REQUIRED_VEHICLES = ['Heavy', 'LMV Badge', 'Trans Badge (PSV)', 'HMV', 'PSV'];
+
+function isDLRequired(vehicleValue) {
+  return DL_REQUIRED_VEHICLES.some(v => vehicleValue && vehicleValue.toLowerCase().includes(v.toLowerCase()));
+}
+
+function toggleDLFieldsVisibility(vehicleSelectId, dlSectionId) {
+  const vehicle = document.getElementById(vehicleSelectId)?.value || '';
+  const section = document.getElementById(dlSectionId);
+  if (!section) return;
+  if (isDLRequired(vehicle)) {
+    section.style.display = '';
+  } else {
+    section.style.display = 'none';
+    // Clear fields when hidden so stale data doesn't persist
+    const dlNum = section.querySelector('input[type="text"]');
+    const dlExp = section.querySelector('input[type="date"]');
+    if (dlNum) dlNum.value = '';
+    if (dlExp) dlExp.value = '';
+  }
+}
+
 async function addStudentFromModal() {
   if (!hasActionPermission('add_student')) {
     alert('You do not have permission to add students.');
@@ -9014,6 +9094,20 @@ async function addStudentFromModal() {
   const agentName = document.getElementById('qs-agent') ? document.getElementById('qs-agent').value.trim() : '';
   const studentId = document.getElementById('qs-student-id').value.trim();
   const totalClasses = parseInt(document.getElementById('qs-total-classes') && document.getElementById('qs-total-classes').value) || 27;
+
+  // DL validation for vehicles that require it
+  const selectedVehicle = document.getElementById('qs-vehicle').value;
+  let dlNumber = '', dlExpiry = '';
+  if (isDLRequired(selectedVehicle)) {
+    dlNumber = (document.getElementById('qs-dl-number')?.value || '').trim();
+    dlExpiry = document.getElementById('qs-dl-expiry')?.value || '';
+    if (!dlNumber) { alert('DL Number is required for ' + selectedVehicle + ' vehicle type.'); return; }
+    if (!dlExpiry) { alert('DL Expiry Date is required for ' + selectedVehicle + ' vehicle type.'); return; }
+    // Check DL is not already expired
+    if (new Date(dlExpiry) < new Date()) {
+      if (!confirm('The DL expiry date (' + dlExpiry + ') is in the past. Enroll anyway?')) return;
+    }
+  }
   try {
     const qsInstEl = document.getElementById('qs-instructor');
     const qsInstValue = qsInstEl ? qsInstEl.value : '';
@@ -9044,12 +9138,18 @@ async function addStudentFromModal() {
       aadhaar: document.getElementById('qs-aadhaar').value || '',
       studentId: studentId || '',
       schoolId: currentSchoolId,
+      dlNumber: dlNumber || '',
+      dlExpiry: dlExpiry || '',
       ...FirebaseService.getOwnerScope()
     };
     if (agentName) ensureAgentRegistered(agentName);
     
-    await FirebaseService.addStudent(studentData);
-    
+    const studentRef = await FirebaseService.addStudent(studentData);
+    if (studentRef && studentRef.id) {
+      studentData.id = studentRef.id;
+      studentData.firebaseId = studentRef.id;
+    }
+
     // Save class schedule if selected
     const selectedDays = Array.from(document.querySelectorAll('.qs-day-check:checked')).map(cb => cb.value);
     const scheduleStart = document.getElementById('qs-schedule-start')?.value;
@@ -9098,6 +9198,7 @@ async function addStudentFromModal() {
         desc: `Student enrollment fee: ${name}`,
         amount: amountPaid,
         paymentMode: paymentMode,
+        studentId: studentRef && studentRef.id ? studentRef.id : '',
         schoolId: currentSchoolId ? currentSchoolId : '',
         ...FirebaseService.getOwnerScope()
       };
@@ -9893,6 +9994,168 @@ async function deleteTransaction(id) {
   }
 }
 
+// ── ORPHANED FEE CLEANUP ─────────────────────────────────────────────────────
+// Finds Student Fee transactions whose studentId no longer exists in this school
+async function previewOrphanedFees() {
+  if (currentRole !== 'owner') { showToast('⚠ Only owners can clean up fees'); return; }
+  if (!currentSchoolId) { alert('Please select a school first.'); return; }
+
+  // Show loading state
+  const existing = document.getElementById('modal-orphan-fees');
+  if (existing) existing.remove();
+
+  const loadingModal = document.createElement('div');
+  loadingModal.className = 'modal-overlay';
+  loadingModal.id = 'modal-orphan-fees';
+  loadingModal.style.display = 'flex';
+  loadingModal.innerHTML = `
+    <div class="modal" style="width:520px;max-width:96vw;">
+      <div class="modal-header"><h3>🧹 Clean Orphaned Fees</h3>
+        <button class="modal-close" onclick="document.getElementById('modal-orphan-fees').remove()">✕</button>
+      </div>
+      <div style="padding:32px;text-align:center;color:var(--text2);">
+        <div style="font-size:32px;margin-bottom:12px;">🔍</div>
+        <div>Scanning transactions…</div>
+      </div>
+    </div>`;
+  document.body.appendChild(loadingModal);
+
+  try {
+    // Get all known student IDs in this school
+    const knownIds = new Set(
+      (data.students || [])
+        .filter(s => !currentSchoolId || s.schoolId === currentSchoolId)
+        .map(s => String(s.firebaseId || s.id))
+        .filter(Boolean)
+    );
+
+    // Fetch ALL Student Fee transactions for this school from Firestore
+    // (in-memory data.transactions may be month-filtered)
+    let allFeeTx = [];
+    try {
+      const snap = await db.collection('schools').doc(currentSchoolId).collection('transactions')
+        .where('category', '==', 'Student Fee')
+        .get();
+      allFeeTx = snap.docs.map(d => ({ firebaseId: d.id, id: d.id, ...d.data() }));
+    } catch(e) {
+      // Fallback: use in-memory data
+      allFeeTx = (data.transactions || []).filter(t =>
+        (!currentSchoolId || t.schoolId === currentSchoolId) && t.category === 'Student Fee'
+      );
+    }
+
+    // Orphaned = has a studentId that is NOT in knownIds
+    const orphaned = allFeeTx.filter(t => t.studentId && !knownIds.has(String(t.studentId)));
+    // Unknown = Student Fee with NO studentId at all (legacy records — show separately)
+    const noId = allFeeTx.filter(t => !t.studentId);
+
+    const modal = document.getElementById('modal-orphan-fees');
+    if (!modal) return;
+
+    if (orphaned.length === 0) {
+      modal.querySelector('.modal').innerHTML = `
+        <div class="modal-header"><h3>🧹 Clean Orphaned Fees</h3>
+          <button class="modal-close" onclick="document.getElementById('modal-orphan-fees').remove()">✕</button>
+        </div>
+        <div style="padding:28px;text-align:center;">
+          <div style="font-size:40px;margin-bottom:12px;">✅</div>
+          <div style="font-size:15px;font-weight:600;color:var(--success);margin-bottom:8px;">No orphaned fees found!</div>
+          <div style="font-size:13px;color:var(--text2);">All Student Fee transactions are linked to existing students.</div>
+          ${noId.length > 0 ? `<div style="margin-top:16px;padding:12px;background:#fef3c7;border-radius:8px;font-size:12px;color:#92400e;">
+            ⚠ ${noId.length} legacy fee record(s) have no studentId and cannot be auto-matched.
+            You can delete them manually from the cashflow table if needed.
+          </div>` : ''}
+          <button class="btn btn-outline" style="margin-top:20px;" onclick="document.getElementById('modal-orphan-fees').remove()">Close</button>
+        </div>`;
+      return;
+    }
+
+    const total = orphaned.reduce((s, t) => s + (t.amount || 0), 0);
+    const rows = orphaned.map(t => `
+      <tr>
+        <td style="font-size:12px;">${t.date || '—'}</td>
+        <td style="font-size:12px;">${t.desc || '—'}</td>
+        <td style="font-size:12px;font-family:monospace;color:var(--text2);">${String(t.studentId).slice(-8)}</td>
+        <td style="font-size:12px;font-weight:600;color:var(--success);">₹${(t.amount||0).toLocaleString()}</td>
+      </tr>`).join('');
+
+    // Store IDs on window so the confirm handler can access them
+    window.__orphanedFeeTxIds = orphaned.map(t => String(t.firebaseId || t.id));
+
+    modal.querySelector('.modal').innerHTML = `
+      <div class="modal-header"><h3>🧹 Clean Orphaned Fees</h3>
+        <button class="modal-close" onclick="document.getElementById('modal-orphan-fees').remove()">✕</button>
+      </div>
+      <div style="padding:20px;">
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px 16px;margin-bottom:16px;">
+          <strong style="color:#dc2626;">Found ${orphaned.length} orphaned fee record(s)</strong>
+          <span style="color:#6b7280;font-size:12px;margin-left:8px;">— students no longer exist</span>
+        </div>
+        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;">
+          <table class="data-table" style="font-size:12px;">
+            <thead><tr><th>Date</th><th>Description</th><th>Student ID (last 8)</th><th>Amount</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="margin-top:14px;padding:10px 14px;background:var(--surface2);border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:13px;color:var(--text2);">Total to delete:</span>
+          <strong style="font-size:15px;color:var(--danger);">₹${total.toLocaleString()} (${orphaned.length} records)</strong>
+        </div>
+        ${noId.length > 0 ? `<div style="margin-top:10px;padding:10px 14px;background:#fef3c7;border-radius:8px;font-size:12px;color:#92400e;">
+          ⚠ ${noId.length} additional legacy record(s) have no studentId and are not shown here. Delete them manually from the cashflow table if needed.
+        </div>` : ''}
+        <div style="display:flex;gap:10px;margin-top:18px;">
+          <button class="btn btn-danger" onclick="confirmDeleteOrphanedFees()" style="flex:1;">🗑 Delete All ${orphaned.length} Records</button>
+          <button class="btn btn-outline" onclick="document.getElementById('modal-orphan-fees').remove()" style="flex:1;">Cancel</button>
+        </div>
+      </div>`;
+  } catch(err) {
+    console.error('Orphan fee scan error:', err);
+    const modal = document.getElementById('modal-orphan-fees');
+    if (modal) modal.remove();
+    alert('Error scanning transactions: ' + err.message);
+  }
+}
+
+async function confirmDeleteOrphanedFees() {
+  const ids = window.__orphanedFeeTxIds || [];
+  if (!ids.length) return;
+
+  const btn = document.querySelector('#modal-orphan-fees .btn-danger');
+  if (btn) { btn.textContent = 'Deleting…'; btn.disabled = true; }
+
+  try {
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      // Batch delete in chunks of 500 (Firestore limit)
+      const chunkSize = 500;
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        const batch = db.batch();
+        chunk.forEach(txId => {
+          batch.delete(
+            db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId)
+          );
+        });
+        await batch.commit();
+      }
+    }
+    // Remove from local cache
+    data.transactions = (data.transactions || []).filter(t => !ids.includes(String(t.firebaseId || t.id)));
+    try { FGCache.invalidate(currentSchoolId, 'transactions'); } catch(_e) {}
+
+    document.getElementById('modal-orphan-fees')?.remove();
+    window.__orphanedFeeTxIds = [];
+    renderCashflow();
+    showToast('🗑 ' + ids.length + ' orphaned fee record(s) deleted');
+    addNotification(ids.length + ' orphaned student fee transaction(s) cleaned up', 'success');
+  } catch(err) {
+    console.error('Delete orphaned fees error:', err);
+    alert('Error deleting records: ' + err.message);
+    if (btn) { btn.textContent = '🗑 Delete All'; btn.disabled = false; }
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // ── OFFICE SELF-ATTENDANCE ───────────────────────────────────────────────────
 let officeAttMarked = false;
 
@@ -10132,11 +10395,9 @@ function renderReport() {
   const rc = document.getElementById('report-content');
   if (!rc) return;
 
-  const schoolTx = Array.isArray(data.transactions)
-    ? data.transactions.filter(function(t){
-        return !currentSchoolId || t.schoolId === currentSchoolId;
-      })
-    : [];
+  const schoolTx = (data.transactions||[]).filter(function(t){
+    return !currentSchoolId || t.schoolId === currentSchoolId;
+  });
 
   const schoolName = (function(){
     var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
@@ -10164,7 +10425,7 @@ function renderReport() {
       catMap[cat].count++;
     });
 
-    const recent = dayTx.slice();
+    const recent = dayTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
     const catRows = Object.keys(catMap).map(function(cat){
       var c = catMap[cat];
       var color = c.type==='income' ? 'var(--success)' : 'var(--danger)';
@@ -10240,7 +10501,7 @@ function renderReport() {
     });
 
     // Transaction rows for the selected month
-    const recent = monthTx.slice();
+    const recent = monthTx.slice().sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
 
     const catRows = Object.keys(catMap).map(function(cat){
       var c = catMap[cat];
@@ -11326,6 +11587,8 @@ async function renderOwnerAttendance() {
     let totalAbsent = 0;
     let studentsPresent = 0;
     let staffPresent = 0;
+    let classesToday = 0;
+    let classesTotal = 0;
 
     // Process each school
     for (const school of userSchools) {
@@ -11426,6 +11689,16 @@ async function renderOwnerAttendance() {
             }
           });
         }
+
+        // Fetch classSessions for this school
+        try {
+          const sessSnap = await db.collection('schools').doc(school.id).collection('classSessions').get();
+          sessSnap.forEach(function(doc) {
+            classesTotal++;
+            if (doc.data().date === targetDate) classesToday++;
+          });
+        } catch(e) { /* ignore if no permission */ }
+
       } catch (error) {
         console.error(`Error loading attendance for school ${school.name}:`, error);
       } finally {
@@ -11439,6 +11712,8 @@ async function renderOwnerAttendance() {
     document.getElementById('owner-total-absent').textContent = totalAbsent;
     document.getElementById('owner-students-present').textContent = studentsPresent;
     document.getElementById('owner-staff-present').textContent = staffPresent;
+    document.getElementById('owner-classes-today').textContent = classesToday;
+    document.getElementById('owner-classes-total').textContent = classesTotal;
 
     // Render summary cards
     renderOwnerAttendanceSummary(allAttendanceData);
@@ -11931,6 +12206,33 @@ function getCurrentInstructorName() {
   if (!matched) matched = allInst.find(inst => inst.name && email.toLowerCase().includes(inst.name.toLowerCase()));
   if (matched) return matched.name || (display || username);
   return display || username;
+}
+
+// Returns the logged-in instructor's own staff record (role === 'instructor'), matched
+// the same way getCurrentInstructorName() matches, so permission checks stay consistent.
+function getCurrentInstructorRecord() {
+  if (!currentUser || !currentUser.email) return null;
+  const email = (currentUser.email || '').toString();
+  const display = (currentUser.displayName || '').toString();
+  const username = email.split('@')[0] || '';
+  const instructors = (data.staff || []).filter(st => st.role === 'instructor');
+  const adminInst = (data.admins || []).filter(a => a.role === 'instructor');
+  const allInst = instructors.concat(adminInst);
+  let matched = allInst.find(inst => inst.email && inst.email.toLowerCase() === email.toLowerCase());
+  if (!matched && display) matched = allInst.find(inst => inst.name && inst.name.toLowerCase() === display.toLowerCase());
+  if (!matched && username) matched = allInst.find(inst => inst.name && inst.name.toLowerCase() === username.toLowerCase());
+  if (!matched) matched = allInst.find(inst => inst.name && email.toLowerCase().includes(inst.name.toLowerCase()));
+  return matched || null;
+}
+
+// Whether the currently logged-in instructor is allowed to pick/train students
+// assigned to other instructors. Owners and office staff always have full access;
+// instructors need the "Pick Students From Other Classes" checkbox enabled by admin.
+function canPickOtherStudents() {
+  if (currentRole === 'owner' || currentRole === 'office') return true;
+  if (currentRole !== 'instructor') return false;
+  const rec = getCurrentInstructorRecord();
+  return !!(rec && rec.permissions && rec.permissions.otherStudents);
 }
 
 function hasSelfAttendance() {
@@ -12908,6 +13210,17 @@ function openModal(id) {
 }
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
+  // Reset DL fields when the Add Student modal is closed
+  if (id === 'modal-add-student') {
+    const dlSection = document.getElementById('qs-dl-section');
+    if (dlSection) {
+      dlSection.style.display = 'none';
+      const dlNum = document.getElementById('qs-dl-number');
+      const dlExp = document.getElementById('qs-dl-expiry');
+      if (dlNum) dlNum.value = '';
+      if (dlExp) dlExp.value = '';
+    }
+  }
 }
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); });
@@ -13083,6 +13396,26 @@ async function deleteStudent(id) {
       await db.collection('schools').doc(currentSchoolId).collection('students').doc(sid).delete();
     }
 
+    // 1b. Delete all transactions linked to this student (Student Fee entries)
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      try {
+        const txSnap = await db.collection('schools').doc(currentSchoolId).collection('transactions')
+          .where('studentId', '==', sid)
+          .get();
+        if (!txSnap.empty) {
+          const batch = db.batch();
+          txSnap.docs.forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+          // Remove from local cache too
+          data.transactions = (data.transactions || []).filter(t => t.studentId !== sid);
+          console.log('Deleted ' + txSnap.docs.length + ' fee transaction(s) for student ' + sid);
+        }
+      } catch (txDelErr) {
+        // Non-fatal — transactions may not have studentId on older records
+        console.warn('Could not delete student transactions:', txDelErr.message);
+      }
+    }
+
     // 2. Delete Firebase Auth account via Cloud Function (requires 'deleteAuthUser' callable function)
     if (studentAuthUid && typeof firebaseFunctions !== 'undefined' && firebaseFunctions) {
       try {
@@ -13116,13 +13449,17 @@ function renderOtherStudentsPage() {
   const page = document.getElementById('page-other-students');
   if (!page) return;
 
+  if (!canPickOtherStudents()) {
+    page.innerHTML =
+      '<div class="page-header"><div><h2>&#x1F465; Other Students</h2></div></div>' +
+      '<div style="text-align:center;padding:60px;color:var(--text2);"><div style="font-size:48px;margin-bottom:16px;">&#x1F512;</div><div>You don\'t have permission to pick students from other classes.<br>Ask your school admin to enable this for your account.</div></div>';
+    return;
+  }
+
   // All active non-completed students in the school NOT assigned to this instructor
   const myEmail = (typeof currentUser !== 'undefined' && currentUser ? currentUser.email : '').toLowerCase();
   const myName  = (typeof getCurrentInstructorName === 'function' ? getCurrentInstructorName() : '').toLowerCase();
-  const activeSession = loadActiveOtherClassSession();
-  if (activeSession) {
-    ensureActiveClassTimer();
-  }
+  const allActiveSessions = getAllActiveSessions();
 
   const allSchoolStudents = (data.students||[]).filter(function(s) {
     if (currentSchoolId && s.schoolId !== currentSchoolId) return false;
@@ -13137,18 +13474,21 @@ function renderOtherStudentsPage() {
     return;
   }
 
-  const activeSessionBanner = activeSession ?
+  const activeSessionBanner = allActiveSessions.length > 0 ?
     '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:16px;">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
-        '<div style="min-width:0;">' +
-          '<div style="font-size:13px;font-weight:600;color:#1d4ed8;">&#x23F1; Active class in progress</div>' +
-          '<div style="font-size:13px;color:var(--text2);margin-top:4px;">Student: <strong>' + (activeSession.studentName||'Unknown') + '</strong> &nbsp;|&nbsp; Instructor: <strong>' + (activeSession.instructorName||'Unknown') + '</strong> &nbsp;|&nbsp; Started at: <strong>' + new Date(activeSession.startTime).toLocaleTimeString('en-IN') + '</strong></div>' +
-        '</div>' +
-        '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
-          '<button class="btn btn-accent btn-sm" onclick="openOtherStudentClassModal(\'' + String(activeSession.studentId).replace(/'/g,"\\'") + '\',\'' + (activeSession.studentName||'').replace(/'/g,"\\'") + '\')">Open Active Class</button>' +
-          '<button class="btn btn-danger btn-sm" onclick="endClassTimer(\'' + String(activeSession.studentId).replace(/'/g,"\\'") + '\',\'' + (activeSession.studentName||'').replace(/'/g,"\\'") + '\')">End Active Class</button>' +
-        '</div>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:' + (allActiveSessions.length>0?'10px':'0') + ';">' +
+        '<div style="font-size:13px;font-weight:600;color:#1d4ed8;">&#x23F1; ' + allActiveSessions.length + ' active class session' + (allActiveSessions.length===1?'':'s') + ' in progress</div>' +
+        '<button class="btn btn-danger btn-sm" onclick="endAllActiveSessions()">&#x23F9; End All Classes</button>' +
       '</div>' +
+      allActiveSessions.map(function(sess) {
+        return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 0;border-top:1px solid #dbeafe;">' +
+          '<div style="font-size:13px;color:var(--text2);">Student: <strong>' + (sess.studentName||'Unknown') + '</strong> &nbsp;|&nbsp; Instructor: <strong>' + (sess.instructorName||'Unknown') + '</strong> &nbsp;|&nbsp; Started at: <strong>' + new Date(sess.startTime).toLocaleTimeString('en-IN') + '</strong></div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button class="btn btn-accent btn-sm" onclick="openOtherStudentClassModal(\'' + String(sess.studentId).replace(/'/g,"\\'") + '\',\'' + (sess.studentName||'').replace(/'/g,"\\'") + '\')">Open</button>' +
+            '<button class="btn btn-danger btn-sm" onclick="endClassTimer(\'' + String(sess.studentId).replace(/'/g,"\\'") + '\',\'' + (sess.studentName||'').replace(/'/g,"\\'") + '\')">End</button>' +
+          '</div>' +
+        '</div>';
+      }).join('') +
     '</div>' : '';
 
   const cards = allSchoolStudents.map(function(s) {
@@ -13162,6 +13502,13 @@ function renderOtherStudentsPage() {
     const isMyStudent = (s.instructorEmail||'').toLowerCase()===myEmail ||
       (s.instructor||'').toLowerCase()===myName ||
       (s.instructorName||'').toLowerCase()===myName;
+    const studentSession = getActiveSessionForStudent(sid);
+    const actionButton = studentSession
+      ? ('<div style="display:flex;gap:8px;">' +
+          '<button class="btn btn-accent btn-sm" style="flex:1;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">Open Active Class</button>' +
+          '<button class="btn btn-danger btn-sm" onclick="endClassTimer(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">End</button>' +
+        '</div>')
+      : '<button class="btn btn-accent btn-sm" style="width:100%;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">&#x23F1; Give Training</button>';
     return '<div class="card" style="margin:0;">' +
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">' +
         '<div class="avatar" style="width:42px;height:42px;font-size:14px;background:' + COLORS[colorIdx] + '22;color:' + COLORS[colorIdx] + ';">' + initials + '</div>' +
@@ -13176,7 +13523,7 @@ function renderOtherStudentsPage() {
         '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;"><span>Progress</span><span style="font-weight:600;">' + classes + '/' + total + '</span></div>' +
         '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%;background:var(--accent2)"></div></div>' +
       '</div>' +
-      '<button class="btn btn-accent btn-sm" style="width:100%;" onclick="openOtherStudentClassModal(\'' + sid + '\',\'' + (s.name||'').replace(/'/g,"\\'") + '\')">&#x23F1; Give Training</button>' +
+      actionButton +
     '</div>';
   }).join('');
 
@@ -13186,107 +13533,131 @@ function renderOtherStudentsPage() {
       '<div style="font-size:13px;color:var(--text2);align-self:center;">' + allSchoolStudents.length + ' active students</div>' +
     '</div>' +
     activeSessionBanner +
-    '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#92400e;">&#x1F4A1; Click <strong>Give Training</strong> on any student to start a timed class session. You\'ll be asked to enter your instructor name. Class duration is auto-calculated.</div>' +
+    '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#92400e;">&#x1F4A1; Click <strong>Give Training</strong> on any student to start a timed class session. You can run multiple sessions at once.</div>' +
     '<div class="two-col">' + cards + '</div>';
 }
 
 // ============================================================
-// CLASS TIMER (Other Student Training)
+// CLASS TIMER (Other Student Training) — Multi-Session
 // ============================================================
 let _classTimerInterval = null;
-let _classStartTime = null;
-const ACTIVE_OTHER_CLASS_KEY = 'fg_activeOtherStudentClass';
-let _activeOtherClassSession = null;
+let _modalActiveStudentId = null; // student id whose timer modal is currently open
+const ACTIVE_OTHER_CLASS_KEY = 'fg_activeOtherStudentClass'; // legacy single-session key (migrated)
+const ACTIVE_SESSIONS_KEY = 'fg_activeOtherClassSessions';   // multi-session key
+let _activeSessions = null; // { [studentId]: { studentId, studentName, instructorName, startTime } }
 
-function loadActiveOtherClassSession() {
-  if (_activeOtherClassSession) return _activeOtherClassSession;
+function loadActiveSessions() {
+  if (_activeSessions) return _activeSessions;
+  _activeSessions = {};
   try {
-    const raw = localStorage.getItem(ACTIVE_OTHER_CLASS_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && parsed.studentId && parsed.startTime) {
-      _activeOtherClassSession = parsed;
-      return _activeOtherClassSession;
+    const raw = localStorage.getItem(ACTIVE_SESSIONS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') _activeSessions = parsed;
+    } else {
+      // Migrate legacy single-session data, if present
+      const legacyRaw = localStorage.getItem(ACTIVE_OTHER_CLASS_KEY);
+      if (legacyRaw) {
+        try {
+          const legacy = JSON.parse(legacyRaw);
+          if (legacy && legacy.studentId && legacy.startTime) {
+            _activeSessions[String(legacy.studentId)] = legacy;
+          }
+        } catch (e) { /* ignore malformed legacy data */ }
+        localStorage.removeItem(ACTIVE_OTHER_CLASS_KEY);
+        saveActiveSessions();
+      }
     }
   } catch (e) {
-    console.warn('Could not load active class session:', e.message);
+    console.warn('Could not load active class sessions:', e.message);
+    _activeSessions = {};
   }
-  return null;
+  return _activeSessions;
 }
 
-function saveActiveOtherClassSession(session) {
-  _activeOtherClassSession = session;
+function saveActiveSessions() {
   try {
-    localStorage.setItem(ACTIVE_OTHER_CLASS_KEY, JSON.stringify(session));
+    localStorage.setItem(ACTIVE_SESSIONS_KEY, JSON.stringify(_activeSessions || {}));
   } catch (e) {
-    console.warn('Could not save active class session:', e.message);
+    console.warn('Could not save active class sessions:', e.message);
   }
 }
 
-function clearActiveOtherClassSession() {
-  _activeOtherClassSession = null;
-  try {
-    localStorage.removeItem(ACTIVE_OTHER_CLASS_KEY);
-  } catch (e) {
-    console.warn('Could not clear active class session:', e.message);
-  }
+function getActiveSessionForStudent(studentId) {
+  const sessions = loadActiveSessions();
+  return sessions[String(studentId)] || null;
 }
 
-function ensureActiveClassTimer() {
-  const active = loadActiveOtherClassSession();
-  if (!active) return false;
-  if (!_classStartTime) _classStartTime = new Date(active.startTime);
-  if (!_classTimerInterval) startClassTimerInterval();
-  return true;
+function setActiveSessionForStudent(studentId, session) {
+  const sessions = loadActiveSessions();
+  sessions[String(studentId)] = session;
+  saveActiveSessions();
+}
+
+function removeActiveSessionForStudent(studentId) {
+  const sessions = loadActiveSessions();
+  delete sessions[String(studentId)];
+  saveActiveSessions();
+}
+
+function getAllActiveSessions() {
+  const sessions = loadActiveSessions();
+  return Object.keys(sessions).map(function(k) { return sessions[k]; });
 }
 
 function startClassTimerInterval() {
-  if (!_classStartTime || _classTimerInterval) return;
+  if (_classTimerInterval) return;
   updateClassTimerDisplay();
   _classTimerInterval = setInterval(updateClassTimerDisplay, 1000);
 }
 
+function stopClassTimerIntervalIfIdle() {
+  if (!_modalActiveStudentId && _classTimerInterval) {
+    clearInterval(_classTimerInterval);
+    _classTimerInterval = null;
+  }
+}
+
 function updateClassTimerDisplay() {
-  if (!_classStartTime) return;
-  const elapsed = Math.floor((Date.now() - _classStartTime.getTime()) / 1000);
+  if (!_modalActiveStudentId) return;
+  const session = getActiveSessionForStudent(_modalActiveStudentId);
+  if (!session) return;
+  const start = new Date(session.startTime);
+  const elapsed = Math.floor((Date.now() - start.getTime()) / 1000);
   const h = Math.floor(elapsed / 3600);
   const m = Math.floor((elapsed % 3600) / 60);
   const s = elapsed % 60;
   const display = document.getElementById('class-timer-display');
   const status = document.getElementById('class-timer-status');
   if (display) display.textContent = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
-  if (status && loadActiveOtherClassSession()) {
-    status.textContent = 'Class in progress… started at ' + _classStartTime.toLocaleTimeString('en-IN');
-  }
+  if (status) status.textContent = 'Class in progress… started at ' + start.toLocaleTimeString('en-IN');
 }
 
 function openOtherStudentClassModal(studentId, studentName) {
-  const activeSession = loadActiveOtherClassSession();
-  const isActiveSession = activeSession && String(activeSession.studentId) === String(studentId);
-  if (activeSession && !isActiveSession) {
-    studentId = activeSession.studentId;
-    studentName = activeSession.studentName;
-  }
+  const activeSession = getActiveSessionForStudent(studentId);
+  const isActiveSession = !!activeSession;
   const s = (data.students||[]).find(function(x){ return String(x.firebaseId||x.id)===String(studentId); });
   const instructorValue = isActiveSession ? activeSession.instructorName : ((typeof getCurrentInstructorName==='function'?getCurrentInstructorName():'')||'');
-  if (isActiveSession && !_classStartTime) {
-    _classStartTime = new Date(activeSession.startTime);
-  }
-  ensureActiveClassTimer();
 
-  const timerDisplay = isActiveSession && _classStartTime ? (function(){
-    const elapsed = Math.floor((Date.now() - _classStartTime.getTime()) / 1000);
+  _modalActiveStudentId = String(studentId);
+  if (isActiveSession) startClassTimerInterval();
+
+  const timerDisplay = isActiveSession ? (function(){
+    const start = new Date(activeSession.startTime);
+    const elapsed = Math.floor((Date.now() - start.getTime()) / 1000);
     const h = Math.floor(elapsed / 3600);
     const m = Math.floor((elapsed % 3600) / 60);
     const s = elapsed % 60;
     return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
   })() : '00:00:00';
-  const timerStatus = isActiveSession && _classStartTime
-    ? 'Class in progress… started at ' + _classStartTime.toLocaleTimeString('en-IN')
+  const timerStatus = isActiveSession
+    ? 'Class in progress… started at ' + new Date(activeSession.startTime).toLocaleTimeString('en-IN')
     : 'Press Start to begin the class session';
   const startBtnStyle = isActiveSession ? 'display:none;' : '';
   const endBtnStyle = isActiveSession ? '' : 'display:none;';
   const instructorDisabled = isActiveSession ? 'disabled' : '';
+
+  const otherActiveCount = getAllActiveSessions().filter(function(sess) { return String(sess.studentId) !== String(studentId); }).length;
 
   const old = document.getElementById('modal-other-class');
   if (old) old.remove();
@@ -13302,6 +13673,9 @@ function openOtherStudentClassModal(studentId, studentName) {
       '</div>' +
       (s ? '<div style="background:var(--surface2);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;font-family:\'DM Sans\';">' +
         '&#x1F697; ' + (s.vehicle||'—') + ' &nbsp;&#x2022;&nbsp; Classes: ' + (s.classes||0) + '/' + (s.totalClasses||27) + ' &nbsp;&#x2022;&nbsp; Instructor: ' + (s.instructor||'—') +
+      '</div>' : '') +
+      (otherActiveCount > 0 ? '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:8px 12px;margin-bottom:14px;font-size:12px;color:#9a3412;">' +
+        '&#x2139; ' + otherActiveCount + ' other class session' + (otherActiveCount===1?'':'s') + ' also in progress.' +
       '</div>' : '') +
       '<div class="form-group" style="margin-bottom:14px;">' +
         '<label style="font-weight:600;">Your Name (Instructor) *</label>' +
@@ -13327,6 +13701,8 @@ function openOtherStudentClassModal(studentId, studentName) {
 function closeOtherClassModal() {
   const modal = document.getElementById('modal-other-class');
   if (modal) modal.remove();
+  _modalActiveStudentId = null;
+  stopClassTimerIntervalIfIdle();
   if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
 }
 
@@ -13338,20 +13714,16 @@ function startClassTimer(studentId, studentName) {
     return;
   }
 
-  const activeSession = loadActiveOtherClassSession();
-  if (activeSession && String(activeSession.studentId) !== String(studentId)) {
-    alert('A different class is already active. End that session before starting a new one.');
-    return;
-  }
-
+  // Multiple simultaneous sessions are allowed — no blocking check here.
   const instructorName = instructorEl.value.trim();
-  _classStartTime = new Date();
-  saveActiveOtherClassSession({
+  const startTime = new Date();
+  setActiveSessionForStudent(studentId, {
     studentId: String(studentId),
     studentName: studentName,
     instructorName: instructorName,
-    startTime: _classStartTime.toISOString()
+    startTime: startTime.toISOString()
   });
+  _modalActiveStudentId = String(studentId);
 
   const startBtn = document.getElementById('btn-start-class');
   const endBtn   = document.getElementById('btn-end-class');
@@ -13359,28 +13731,25 @@ function startClassTimer(studentId, studentName) {
   const instInput = document.getElementById('other-class-instructor');
   if (startBtn) startBtn.style.display = 'none';
   if (endBtn)   endBtn.style.display   = 'block';
-  if (status)   status.textContent = 'Class in progress… started at ' + _classStartTime.toLocaleTimeString('en-IN');
+  if (status)   status.textContent = 'Class in progress… started at ' + startTime.toLocaleTimeString('en-IN');
   if (instInput) instInput.disabled = true;
 
   startClassTimerInterval();
   updateClassTimerDisplay();
+  if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
+  if (typeof renderInstructorStudents === 'function') renderInstructorStudents();
 }
 
-async function endClassTimer(studentId, studentName) {
-  const activeSession = loadActiveOtherClassSession();
-  if (activeSession) {
-    studentId = String(activeSession.studentId);
-    studentName = activeSession.studentName || studentName;
-    if (!_classStartTime && activeSession.startTime) {
-      _classStartTime = new Date(activeSession.startTime);
-    }
-  }
-  if (!_classStartTime) return;
-  clearInterval(_classTimerInterval);
-  _classTimerInterval = null;
-
+// Core session-ending logic shared by single-student end and "End All".
+// Does NOT touch modal DOM — callers handle their own UI updates.
+async function endClassSession(studentId, studentName, instructorNameOverride) {
+  const activeSession = getActiveSessionForStudent(studentId);
+  if (!activeSession) return null;
+  studentId = String(activeSession.studentId);
+  studentName = activeSession.studentName || studentName;
+  const startTime = new Date(activeSession.startTime);
   const endTime = new Date();
-  const durationMs = endTime.getTime() - _classStartTime.getTime();
+  const durationMs = endTime.getTime() - startTime.getTime();
   const durationSec = Math.floor(durationMs / 1000);
   const durationMin = Math.round(durationSec / 60);
   const h = Math.floor(durationSec / 3600);
@@ -13388,7 +13757,7 @@ async function endClassTimer(studentId, studentName) {
   const s = durationSec % 60;
   const durationStr = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
 
-  const instructorName = document.getElementById('other-class-instructor')?.value.trim() || activeSession?.instructorName || '';
+  const instructorName = instructorNameOverride || activeSession.instructorName || '';
   const today = endTime.toISOString().split('T')[0];
 
   // Build session record
@@ -13397,7 +13766,7 @@ async function endClassTimer(studentId, studentName) {
     studentName,
     instructorName,
     date: today,
-    startTime: _classStartTime.toISOString(),
+    startTime: startTime.toISOString(),
     endTime: endTime.toISOString(),
     durationMinutes: durationMin,
     durationDisplay: durationStr,
@@ -13407,22 +13776,16 @@ async function endClassTimer(studentId, studentName) {
   };
 
   // Save to Firebase
+  // NOTE: Do not manually increment localStudent.classes here — updateClasses()
+  // below is the single source of truth for both the Firestore write and the
+  // local state update. Incrementing here too caused a double-count bug
+  // (classes jumped by 2 per ended session).
   let saved = false;
-  const localStudent = (data.students||[]).find(function(x) {
-    return String(x.id) === String(studentId) || String(x.firebaseId) === String(studentId) || String(x.studentId) === String(studentId);
-  }) || null;
-  if (localStudent) {
-    const currentClasses = (localStudent.classes || 0);
-    const maxClasses = localStudent.totalClasses || 27;
-    const updatedClasses = currentClasses + 1;
-    localStudent.classes = updatedClasses;
-    if (updatedClasses >= maxClasses) localStudent.status = 'Completed';
-  }
 
   if (typeof db !== 'undefined' && currentSchoolId) {
     try {
       // Save session log
-      const addSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/classSessions', null, sessionRecord);
+      await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/classSessions', null, sessionRecord);
       FGCache.invalidate(currentSchoolId, 'classSessions');
       EnhancedCache.del(currentSchoolId, 'classSessions').catch(e => {});
 
@@ -13444,42 +13807,86 @@ async function endClassTimer(studentId, studentName) {
     }
   }
 
-  // Refresh the current student views after the class session is saved
+  removeActiveSessionForStudent(studentId);
+
+  return { studentId, studentName, instructorName, startTime, endTime, durationStr, durationMin, saved };
+}
+
+async function endClassTimer(studentId, studentName) {
+  const instructorOverride = document.getElementById('other-class-instructor')?.value.trim() || '';
+  const result = await endClassSession(studentId, studentName, instructorOverride);
+  if (!result) return;
+
+  if (String(_modalActiveStudentId) === String(result.studentId)) {
+    // Refresh the current student views after the class session is saved
+    if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
+    if (typeof renderInstructorStudents === 'function') renderInstructorStudents();
+    if (typeof renderStudentAttLog === 'function') renderStudentAttLog();
+    if (typeof renderStudentsTable === 'function') renderStudentsTable();
+    if (typeof renderDashboard === 'function') renderDashboard();
+
+    // Show summary
+    const endBtn   = document.getElementById('btn-end-class');
+    const summary  = document.getElementById('class-session-summary');
+    const display  = document.getElementById('class-timer-display');
+    const status   = document.getElementById('class-timer-status');
+    if (endBtn)  endBtn.style.display  = 'none';
+    if (display) { display.textContent = result.durationStr; display.style.color = 'var(--success)'; }
+    if (status)  status.textContent = 'Class completed!';
+
+    if (summary) {
+      summary.style.display = 'block';
+      summary.innerHTML =
+        '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px;margin-bottom:12px;">' +
+          '<div style="font-weight:600;font-size:14px;color:var(--success);margin-bottom:10px;">&#x2705; Class Session Completed</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">' +
+            '<div><span style="color:var(--text2);">Student:</span> <strong>' + result.studentName + '</strong></div>' +
+            '<div><span style="color:var(--text2);">Instructor:</span> <strong>' + result.instructorName + '</strong></div>' +
+            '<div><span style="color:var(--text2);">Start:</span> <strong>' + result.startTime.toLocaleTimeString('en-IN') + '</strong></div>' +
+            '<div><span style="color:var(--text2);">End:</span> <strong>' + result.endTime.toLocaleTimeString('en-IN') + '</strong></div>' +
+            '<div><span style="color:var(--text2);">Duration:</span> <strong>' + result.durationStr + ' (' + result.durationMin + ' min)</strong></div>' +
+            '<div><span style="color:var(--text2);">Saved:</span> <strong>' + (result.saved ? '&#x2705; Firebase' : '&#x26A0; Local only') + '</strong></div>' +
+          '</div>' +
+        '</div>';
+    }
+    _modalActiveStudentId = null;
+  }
+  stopClassTimerIntervalIfIdle();
+  if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
+  showToast('&#x2705; Class session recorded — ' + result.durationStr + ' (' + result.durationMin + ' min)');
+  addNotification('Class session for ' + result.studentName + ' by ' + result.instructorName + ' — ' + result.durationStr, 'success');
+}
+
+async function endAllActiveSessions() {
+  const sessions = getAllActiveSessions();
+  if (sessions.length === 0) return;
+  if (!confirm('End all ' + sessions.length + ' active class session(s)?')) return;
+
+  let ended = 0;
+  for (const session of sessions) {
+    try {
+      const result = await endClassSession(session.studentId, session.studentName, session.instructorName);
+      if (result) {
+        ended++;
+        addNotification('Class session for ' + result.studentName + ' by ' + result.instructorName + ' — ' + result.durationStr, 'success');
+      }
+    } catch(e) {
+      console.warn('Failed to end session for', session.studentId, e.message);
+    }
+  }
+
+  _modalActiveStudentId = null;
+  stopClassTimerIntervalIfIdle();
+  const modal = document.getElementById('modal-other-class');
+  if (modal) modal.remove();
+
   if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
   if (typeof renderInstructorStudents === 'function') renderInstructorStudents();
   if (typeof renderStudentAttLog === 'function') renderStudentAttLog();
   if (typeof renderStudentsTable === 'function') renderStudentsTable();
   if (typeof renderDashboard === 'function') renderDashboard();
 
-  // Show summary
-  const endBtn   = document.getElementById('btn-end-class');
-  const summary  = document.getElementById('class-session-summary');
-  const display  = document.getElementById('class-timer-display');
-  const status   = document.getElementById('class-timer-status');
-  if (endBtn)  endBtn.style.display  = 'none';
-  if (display) { display.textContent = durationStr; display.style.color = 'var(--success)'; }
-  if (status)  status.textContent = 'Class completed!';
-
-  if (summary) {
-    summary.style.display = 'block';
-    summary.innerHTML =
-      '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px;margin-bottom:12px;">' +
-        '<div style="font-weight:600;font-size:14px;color:var(--success);margin-bottom:10px;">&#x2705; Class Session Completed</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">' +
-          '<div><span style="color:var(--text2);">Student:</span> <strong>' + studentName + '</strong></div>' +
-          '<div><span style="color:var(--text2);">Instructor:</span> <strong>' + instructorName + '</strong></div>' +
-          '<div><span style="color:var(--text2);">Start:</span> <strong>' + _classStartTime.toLocaleTimeString('en-IN') + '</strong></div>' +
-          '<div><span style="color:var(--text2);">End:</span> <strong>' + endTime.toLocaleTimeString('en-IN') + '</strong></div>' +
-          '<div><span style="color:var(--text2);">Duration:</span> <strong>' + durationStr + ' (' + durationMin + ' min)</strong></div>' +
-          '<div><span style="color:var(--text2);">Saved:</span> <strong>' + (saved ? '&#x2705; Firebase' : '&#x26A0; Local only') + '</strong></div>' +
-        '</div>' +
-      '</div>';
-  }
-  clearActiveOtherClassSession();
-  _classStartTime = null;
-  if (typeof renderOtherStudentsPage === 'function') renderOtherStudentsPage();
-  showToast('&#x2705; Class session recorded — ' + durationStr + ' (' + durationMin + ' min)');
-  addNotification('Class session for ' + studentName + ' by ' + instructorName + ' — ' + durationStr, 'success');
+  showToast('&#x2705; Ended ' + ended + ' class session(s)');
 }
 async function editStudent(id) {
   const studentId = String(id);
@@ -13512,6 +13919,12 @@ function openEditStudentModal(s) {
     </div>
     <div id="stab-edit-personal">
       <div class="form-grid">
+        <div class="form-group">
+          <label>Student ID ${currentRole==='owner' ? '<span style="background:#d4af37;color:#222;font-size:10px;padding:2px 6px;border-radius:10px;margin-left:6px;">👑 Owner</span>' : ''}</label>
+          <input type="text" id="edit-s-student-id" value="${s.studentId||''}"
+            ${currentRole==='owner' ? '' : 'disabled title="Only owners can edit the Student ID"'}
+            style="${currentRole==='owner' ? 'border:1.5px solid #d4af37;' : 'background:#f0f0f0;color:#888;cursor:not-allowed;'}">
+        </div>
         <div class="form-group"><label>Full Name *</label><input type="text" id="edit-s-name" value="${s.name||''}"></div>
         <div class="form-group"><label>Phone *</label><input type="tel" id="edit-s-phone" value="${s.phone||''}"></div>
         <div class="form-group"><label>Date of Birth</label><input type="date" id="edit-s-dob" value="${s.dob||''}"></div>
@@ -13534,14 +13947,21 @@ function openEditStudentModal(s) {
     <div id="stab-edit-course" style="display:none;">
       <div class="form-grid">
         <div class="form-group"><label>Vehicle Type</label>
-          <select id="edit-s-vehicle">
+          <select id="edit-s-vehicle" onchange="toggleDLFieldsVisibility('edit-s-vehicle','edit-dl-section')">
             ${['2-Wheeler (Gear)','2-Wheeler (Gearless)','4-Wheeler (LMV)','Both 2W + 4W','Heavy','LMV Badge','Trans Badge (PSV)','HMV','PSV','MCWG'].map(v=>`<option ${s.vehicle===v?'selected':''}>${v}</option>`).join('')}
           </select>
+        </div>
+        <!-- DL fields for Edit modal -->
+        <div class="form-group full" id="edit-dl-section" style="display:${isDLRequired(s.vehicle)?'':'none'};background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;">
+          <div style="font-weight:600;font-size:13px;color:#92400e;margin-bottom:10px;">🪪 Driving Licence Details</div>
+          <div class="form-grid">
+            <div class="form-group"><label>DL Number</label><input type="text" id="edit-s-dl-number" value="${s.dlNumber||''}" placeholder="e.g. KA01 20200012345" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase()"></div>
+            <div class="form-group"><label>DL Expiry Date</label><input type="date" id="edit-s-dl-expiry" value="${s.dlExpiry||''}"></div>
+          </div>
         </div>
         <div class="form-group"><label>Instructor</label>
           <select id="edit-s-instructor">
             <option value="">-- No Instructor --</option>
-            ${(data.staff||[]).filter(x=>x.role==='instructor').concat((data.admins||[]).filter(x=>x.role==='instructor')).map(i=>`<option value="${i.email||i.name}" ${(s.instructorEmail===i.email||s.instructor===i.name)?'selected':''}>${i.name}</option>`).join('')}
           </select>
         </div>
         <div class="form-group"><label>Class Time</label><input type="time" id="edit-s-classtime" value="${s.classTime||''}"></div>
@@ -13579,6 +13999,52 @@ function openEditStudentModal(s) {
   </div>`;
   modal.addEventListener('click', e => { if(e.target===modal) modal.remove(); });
   document.body.appendChild(modal);
+  // Populate instructor dropdown after modal is in DOM
+  populateEditInstructorDropdown(s);
+}
+
+function populateEditInstructorDropdown(s) {
+  const sel = document.getElementById('edit-s-instructor');
+  if (!sel) return;
+
+  const staffInst  = (data.staff  || []).filter(function(x){ return x.role === 'instructor'; });
+  const adminInst  = (data.admins || []).filter(function(x){ return x.role === 'instructor'; });
+  const allInst    = staffInst.length > 0 ? staffInst : adminInst;
+
+  sel.innerHTML = '<option value="">-- No Instructor --</option>';
+
+  if (allInst.length === 0) {
+    // staff/admins not loaded yet — fetch and retry
+    const sid = s.schoolId || currentSchoolId;
+    if (typeof db !== 'undefined' && sid) {
+      Promise.all([
+        db.collection('schools').doc(sid).collection('staff').get().catch(function(){ return null; }),
+        db.collection('schools').doc(sid).collection('admins').get().catch(function(){ return null; })
+      ]).then(function(results) {
+        var staffSnap  = results[0];
+        var adminsSnap = results[1];
+        if (staffSnap)  staffSnap.forEach(function(d){  var r = Object.assign({id:d.id,firebaseId:d.id},d.data()); if(!data.staff)  data.staff=[];  data.staff.push(r);  });
+        if (adminsSnap) adminsSnap.forEach(function(d){ var r = Object.assign({id:d.id,firebaseId:d.id},d.data()); if(!data.admins) data.admins=[]; data.admins.push(r); });
+        populateEditInstructorDropdown(s);
+      });
+      sel.innerHTML += '<option disabled>Loading instructors...</option>';
+    } else {
+      sel.innerHTML += '<option disabled>No instructors found</option>';
+    }
+    return;
+  }
+
+  var currentVal = s.instructorEmail || s.instructor || '';
+  allInst.forEach(function(inst) {
+    var val = inst.email || inst.name || '';
+    var opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = inst.name + (inst.phone ? ' — ' + inst.phone : '');
+    if (val && (val === currentVal || inst.name === s.instructor || inst.email === s.instructorEmail)) {
+      opt.selected = true;
+    }
+    sel.appendChild(opt);
+  });
 }
 
 async function saveEditStudent(studentId) {
@@ -13608,8 +14074,14 @@ async function saveEditStudent(studentId) {
     paid: parseInt(document.getElementById('edit-s-paid')?.value)||0,
     status: document.getElementById('edit-s-status')?.value||'Active',
     enrolled: document.getElementById('edit-s-enrolled')?.value||'',
-    notes: document.getElementById('edit-s-notes')?.value||''
+    notes: document.getElementById('edit-s-notes')?.value||'',
+    dlNumber: isDLRequired(document.getElementById('edit-s-vehicle')?.value) ? (document.getElementById('edit-s-dl-number')?.value||'') : '',
+    dlExpiry: isDLRequired(document.getElementById('edit-s-vehicle')?.value) ? (document.getElementById('edit-s-dl-expiry')?.value||'') : ''
   };
+  // Student ID is a privileged field — only owners can change it
+  if (currentRole === 'owner') {
+    updates.studentId = document.getElementById('edit-s-student-id')?.value.trim()||'';
+  }
   const instSigClear = document.getElementById('edit-s-instructor-sig-clear')?.value === '1';
   const traineeSigClear = document.getElementById('edit-s-trainee-sig-clear')?.value === '1';
   const instFile = document.getElementById('edit-s-instructor-signature')?.files?.[0];
@@ -13924,6 +14396,7 @@ function renderOtherServices() {
           '<button class="btn btn-outline btn-sm" onclick="viewOtherService(\'' + svc.id + '\')">View</button>' +
           (currentRole === 'owner' ? '<button class="btn btn-outline btn-sm" onclick="openEditOtherService(\'' + (svc.firebaseId||svc.id) + '\')">&#9998; Edit</button>' : '') +
           '<button class="btn btn-primary btn-sm" onclick="generateServiceInvoice(\'' + svc.id + '\')">\ud83e\uddfe</button>' +
+          (currentRole === 'owner' ? '<button class="btn btn-danger btn-sm" style="padding:4px 8px;" title="Delete" onclick="confirmDeleteOtherService(\\\'' + (svc.firebaseId||svc.id) + '\\\')">&#128465;</button>' : '') +
         '</div></td></tr>';
     }).join('');
     tableHtml = '<table class="data-table"><thead><tr><th>Client</th><th>Address</th><th>Service</th><th>Forms</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table>';
@@ -13948,6 +14421,56 @@ function renderOtherServices() {
       '</div>' +
       '<div id="other-services-list">' + tableHtml + '</div>' +
     '</div>';
+}
+
+async function confirmDeleteOtherService(id, clientName) {
+  if (currentRole !== 'owner') { showToast('⚠ Only owners can delete service records'); return; }
+  const existing = document.getElementById('modal-confirm-delete-svc');
+  if (existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'modal-confirm-delete-svc';
+  modal.style.display = 'flex';
+  modal.innerHTML =
+    '<div class="modal" style="width:420px;max-width:96vw;">' +
+      '<div class="modal-header"><h3>🗑 Delete Service Record</h3>' +
+        '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">✕</button>' +
+      '</div>' +
+      '<div style="padding:20px;">' +
+        '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin-bottom:18px;">' +
+          '<strong style="color:#dc2626;">Delete "' + (clientName || 'this client') + '"?</strong>' +
+          '<div style="font-size:12px;color:#6b7280;margin-top:6px;">This will permanently delete the service record and all associated payment history. This action cannot be undone.</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:10px;">' +
+          '<button class="btn btn-danger" onclick="deleteOtherService(' + String(id) + ')" style="flex:1;">🗑 Yes, Delete</button>' +
+          '<button class="btn btn-outline" onclick="this.closest(\'.modal-overlay\').remove()" style="flex:1;">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function deleteOtherService(id) {
+  if (currentRole !== 'owner') { showToast('⚠ Only owners can delete service records'); return; }
+  const sid = String(id);
+  try {
+    // Delete from Firestore
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(sid).delete();
+    }
+    // Remove from local data
+    data.otherServices = (data.otherServices || []).filter(function(s){ return String(s.firebaseId||s.id) !== sid; });
+    // Close confirm modal
+    document.getElementById('modal-confirm-delete-svc')?.remove();
+    // Refresh page
+    renderOtherServices();
+    showToast('🗑 Service record deleted');
+    addNotification('Other service record deleted', 'warning');
+  } catch(e) {
+    console.error('Delete other service error:', e);
+    alert('Error deleting service record: ' + (e.message || 'Please try again.'));
+  }
 }
 
 function openAddAgentModal() {
@@ -14066,11 +14589,9 @@ function renderFormsRegistry(formType) {
   const licenseNo     = school.licenseNo || school.license || '';
   const canEdit = currentRole === 'owner' || currentRole === 'office';
 
-  const allForms = Array.isArray(data.forms)
-    ? data.forms.filter(function(f) {
-        return f.formType === formType && (!currentSchoolId || f.schoolId === currentSchoolId);
-      })
-    : [];
+  const allForms = (data.forms || []).filter(function(f) {
+    return f.formType === formType && (!currentSchoolId || f.schoolId === currentSchoolId);
+  });
 
   function statusBadge(status) {
     const map = { 'Pending':'background:#fef3c7;color:#b45309', 'Submitted':'background:#dbeafe;color:#1d4ed8', 'Approved':'background:#dcfce7;color:#15803d', 'Rejected':'background:#fee2e2;color:#b91c1c' };
@@ -14096,8 +14617,8 @@ function renderFormsRegistry(formType) {
     : allForms.map(function(f, idx) {
         const fid = f.firebaseId || f.id || '';
         const printButton = '<button class="btn btn-outline btn-sm" onclick="printFormRecord(\'' + fid + '\', \'' + ftCode + '\')">🖨️ Print</button>';
-        const editButton = `<button class="btn btn-outline btn-sm" onclick="editFormRecord(${JSON.stringify(fid)})">✏️</button>`;
-        const deleteButton = currentRole==='owner' ? `<button class="btn btn-danger btn-sm" onclick="deleteFormRecord(${JSON.stringify(fid)})">🗑</button>` : '';
+        const editButton = `<button class="btn btn-outline btn-sm" onclick='editFormRecord(${JSON.stringify(fid)})'>✏️</button>`;
+        const deleteButton = currentRole==='owner' ? `<button class="btn btn-danger btn-sm" onclick='deleteFormRecord(${JSON.stringify(fid)})'>🗑</button>` : '';
         const actionBtns = canEdit
           ? `<div style="display:flex;gap:4px;flex-wrap:wrap;">${printButton}${editButton}${deleteButton}</div>`
           : printButton;
@@ -14363,7 +14884,8 @@ function printFormRecord(id, formTypeCode) {
   .table { width: 100%; border-collapse: collapse; margin-top: 12px; }
   .table td { border: 1px solid #000; padding: 8px 10px; vertical-align: top; font-size: 12px; }
   .table td.label { width: 28%; font-weight: 600; }
-  .table td.value { width: 72%; }
+  .table td.value { width: 62%; }
+  .table td.photo-box { width: 100px; }
   .small-text { font-size: 10.5px; color: #333; }
   .signature-row { display: flex; justify-content: space-between; margin-top: 22px; }
   .signature-block { width: 45%; }
@@ -14377,28 +14899,46 @@ function printFormRecord(id, formTypeCode) {
   ${licenseNo ? '<div class="center subhead">Licence No. ' + licenseNo + '</div>' : ''}
   <div class="center" style="margin-top:10px;font-size:16px;font-weight:bold;">FORM - 14</div>
   <div class="center note">Register Showing the Enrollment to Trainee(s) in the Driving School Establishment</div>
-  ${f.photoDataUrl ? '<div style="text-align:center;margin:12px 0;"><img src="' + f.photoDataUrl + '" style="max-width:140px;max-height:180px;border:1px solid #000;padding:2px;"></div>' : ''}
 
   <table class="table">
-    <tr><td class="label">1. Registration Year</td><td class="value">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td></tr>
-    <tr><td class="label">2. Enrollment Number</td><td class="value">${f.serialNo||''}</td></tr>
-    <tr><td class="label">3. Name of the Trainee</td><td class="value">${f.candidateName||''}</td></tr>
-    <tr><td class="label">4. Son of</td><td class="value">${f.guardianName||''}</td></tr>
-    <tr><td class="label">5. Date of Birth</td><td class="value">${f.dob||''}</td></tr>
-    <tr><td class="label">6. Mobile Number</td><td class="value">${f.phone||''}</td></tr>
-    <tr><td class="label">7. Address</td><td class="value">
+    <tr>
+      <td class="label">1. Registration Year</td>
+      <td class="value" style="border-right:none; padding-right:4px;">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td>
+      <td rowspan="4" style="width:96px;border-left:1px solid #000;padding:0;text-align:center;vertical-align:top;">
+        ${f.photoDataUrl
+          ? `<img src="${f.photoDataUrl}" style="width:96px;height:120px;object-fit:cover;display:block;">`
+          : `<div style="width:96px;height:120px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#999;text-align:center;line-height:1.6;flex-direction:column;"><span>Passport</span><span>Size</span><span>Photo</span></div>`
+        }
+        <div style="font-size:9px;color:#555;padding:2px 0 3px;border-top:1px solid #ccc;">Passport Photo</div>
+      </td>
+    </tr>
+    <tr>
+      <td class="label">2. Enrollment Number</td>
+      <td class="value" style="border-right:none;">${f.serialNo||''}</td>
+    </tr>
+    <tr>
+      <td class="label">3. Name of the Trainee</td>
+      <td class="value" style="border-right:none;">${f.candidateName||''}</td>
+    </tr>
+    <tr>
+      <td class="label">4. Son of</td>
+      <td class="value" style="border-right:none;">${f.guardianName||''}</td>
+    </tr>
+    <tr><td class="label">5. Date of Birth</td><td class="value" colspan="2">${f.dob||''}</td></tr>
+    <tr><td class="label">6. Mobile Number</td><td class="value" colspan="2">${f.phone||''}</td></tr>
+    <tr><td class="label">7. Address</td><td class="value" colspan="2">
       <div><strong>(a)</strong> ${f.address||''}</div>
       <div style="margin-top:6px;"><strong>(b)</strong> ${schoolName || ''}${schoolAddress ? ', ' + schoolAddress : ''}</div>
     </td></tr>
-    <tr><td class="label">8. Class of Vehicle for Which Training Imparted</td><td class="value">${f.vehicleClass||''}</td></tr>
-    <tr><td class="label">9. Date of Enrollment</td><td class="value">${f.enrollDate||''}</td></tr>
-    <tr><td class="label">10. Learner's Licence Number / Learner's Licence Validity</td><td class="value">${f.llNumber||''}${f.llNumber && f.llValidity ? ' / ' : ''}${f.llValidity||''}</td></tr>
-    <tr><td class="label">11. Date of Completion of Course</td><td class="value">${f.endDate14||f.endDate||''}</td></tr>
-    <tr><td class="label">12. Date of Passing the Test of Competence to Drive</td><td class="value">${f.issueDate||f.submissionDate||''}</td></tr>
-    <tr><td class="label">13. Driving Licence Number / Date of Issue / Licensing Authority</td><td class="value">${f.dlNumber||''}${f.dlNumber && f.dlValidFrom ? ' / ' + f.dlValidFrom : f.dlValidFrom||''}${(f.dlNumber||f.dlValidFrom) && f.rtoOffice ? ' / ' + f.rtoOffice : ''}</td></tr>
-    <tr><td class="label">14. Remark</td><td class="value">${f.remarks||''}</td></tr>
-    <tr><td class="label">15. Signature of the Licence Holder</td><td class="value" style="height:48px;"></td></tr>
-    <tr><td class="label">16. Signature of the Instructor</td><td class="value" style="height:48px;"></td></tr>
+    <tr><td class="label">8. Class of Vehicle for Which Training Imparted</td><td class="value" colspan="2">${f.vehicleClass||''}</td></tr>
+    <tr><td class="label">9. Date of Enrollment</td><td class="value" colspan="2">${f.enrollDate||''}</td></tr>
+    <tr><td class="label">10. Learner's Licence Number / Learner's Licence Validity</td><td class="value" colspan="2">${f.llNumber||''}${f.llNumber && f.llValidity ? ' / ' : ''}${f.llValidity||''}</td></tr>
+    <tr><td class="label">11. Date of Completion of Course</td><td class="value" colspan="2">${f.endDate14||f.endDate||''}</td></tr>
+    <tr><td class="label">12. Date of Passing the Test of Competence to Drive</td><td class="value" colspan="2">${f.issueDate||f.submissionDate||''}</td></tr>
+    <tr><td class="label">13. Driving Licence Number / Date of Issue / Licensing Authority</td><td class="value" colspan="2">${f.dlNumber||''}${f.dlNumber && f.dlValidFrom ? ' / ' + f.dlValidFrom : f.dlValidFrom||''}${(f.dlNumber||f.dlValidFrom) && f.rtoOffice ? ' / ' + f.rtoOffice : ''}</td></tr>
+    <tr><td class="label">14. Remark</td><td class="value" colspan="2">${f.remarks||''}</td></tr>
+    <tr><td class="label">15. Signature of the Licence Holder</td><td class="value" colspan="2" style="height:48px;"></td></tr>
+    <tr><td class="label">16. Signature of the Instructor</td><td class="value" colspan="2" style="height:48px;"></td></tr>
   </table>
 
   <div class="signature-row">
@@ -14744,6 +15284,17 @@ async function openEditOtherService(id) {
   set('os-vehicle-number', svc.vehicleNumber);
   set('os-aadhaar',        svc.aadhaar);
   set('os-service-category', svc.serviceCategory || 'DL');
+
+  // For Others category: make sure the stored service types exist in local custom list
+  // before rendering, so the checkboxes appear
+  const serviceTypes = (svc.serviceType||'').split(' + ').map(function(v){ return v.trim(); }).filter(Boolean);
+  if ((svc.serviceCategory || 'DL') === 'Others' && serviceTypes.length > 0) {
+    const local = loadCustomOsServicesLocal();
+    let changed = false;
+    serviceTypes.forEach(function(t) { if (!local.includes(t)) { local.push(t); changed = true; } });
+    if (changed) saveCustomOsServicesLocal(local);
+  }
+
   renderOsServiceOptions();
   set('os-description',    svc.description);
   set('os-total-amount',   svc.totalAmount);
@@ -14757,7 +15308,6 @@ async function openEditOtherService(id) {
   set('os-form14-date',    svc.form14Date);
   set('os-form-remarks',   svc.formRemarks);
 
-  const serviceTypes = (svc.serviceType||'').split(' + ').map(function(v){ return v.trim(); }).filter(Boolean);
   document.querySelectorAll('input[name="os-service-type-cb"]').forEach(function(cb) {
     cb.checked = serviceTypes.includes(cb.value);
   });
@@ -14910,10 +15460,6 @@ function filterOtherServices(query) {
 function openAddOtherServiceModal() {
   const old = document.getElementById('modal-add-other-service');
   if (old) old.remove();
-  const today = new Date().toISOString().split('T')[0];
-  const storedServiceDate = localStorage.getItem('fg_other_service_date') || '';
-  const storedExpectedDate = localStorage.getItem('fg_other_service_expected_date') || '';
-  const serviceDateValue = storedServiceDate || today;
   const modal = document.createElement('div');
   modal.id = 'modal-add-other-service';
   modal.className = 'modal-overlay open';
@@ -14958,6 +15504,7 @@ function openAddOtherServiceModal() {
         <select id="os-service-category" onchange="renderOsServiceOptions()">
           <option value="DL">DL</option>
           <option value="RTO">RTO</option>
+          <option value="Others">Others</option>
         </select>
       </div>
       <div class="form-group"><label>Search Service Type</label><input type="text" id="os-service-search" placeholder="Search services..." oninput="renderOsServiceOptions()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:8px;"></div>
@@ -14975,8 +15522,8 @@ function openAddOtherServiceModal() {
       <div class="form-group"><label>Payment Mode</label>
         <select id="os-payment-mode"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
       </div>
-      <div class="form-group"><label>Service Date</label><input type="date" id="os-date" value="${serviceDateValue}" onchange="localStorage.setItem('fg_other_service_date', this.value || '')"></div>
-      <div class="form-group"><label>Expected Completion</label><input type="date" id="os-expected-date" value="${storedExpectedDate}" onchange="localStorage.setItem('fg_other_service_expected_date', this.value || '')"></div>
+      <div class="form-group"><label>Service Date</label><input type="date" id="os-date" value="${new Date().toISOString().split('T')[0]}"></div>
+      <div class="form-group"><label>Expected Completion</label><input type="date" id="os-expected-date"></div>
     </div>
     <div id="os-balance-display" style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin-top:10px;display:none;">
       <div style="display:flex;justify-content:space-between;font-size:13px;">
@@ -15047,11 +15594,106 @@ function openAddOtherServiceModal() {
   renderOsServiceOptions();
 }
 
+// ---- Custom Other-Services storage (localStorage + Firebase) ----
+const _OS_CUSTOM_LS_KEY = 'fg_customOsServices';
+
+function _osCustomLsKey() {
+  return _OS_CUSTOM_LS_KEY + (currentSchoolId ? '_' + currentSchoolId : '');
+}
+
+function loadCustomOsServicesLocal() {
+  try {
+    const raw = localStorage.getItem(_osCustomLsKey());
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) { return []; }
+}
+
+function saveCustomOsServicesLocal(list) {
+  try { localStorage.setItem(_osCustomLsKey(), JSON.stringify(list)); } catch(e) {}
+}
+
+async function saveCustomOsServiceToFirebase(name) {
+  if (typeof db === 'undefined' || !currentSchoolId) return;
+  try {
+    const ref = db.collection('schools').doc(currentSchoolId).collection('customOsServices');
+    const existing = await ref.where('name', '==', name).limit(1).get();
+    if (existing.empty) {
+      await ref.add({ name: name, schoolId: currentSchoolId, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
+  } catch(e) { console.warn('Could not save custom service to Firebase:', e.message); }
+}
+
+async function deleteCustomOsServiceFromFirebase(name) {
+  if (typeof db === 'undefined' || !currentSchoolId) return;
+  try {
+    const ref = db.collection('schools').doc(currentSchoolId).collection('customOsServices');
+    const snap = await ref.where('name', '==', name).limit(1).get();
+    snap.forEach(function(doc) { doc.ref.delete(); });
+  } catch(e) { console.warn('Could not delete custom service from Firebase:', e.message); }
+}
+
+async function loadCustomOsServicesFromFirebase() {
+  if (typeof db === 'undefined' || !currentSchoolId) return [];
+  try {
+    const snap = await db.collection('schools').doc(currentSchoolId).collection('customOsServices').get();
+    return snap.docs.map(function(d) { return d.data().name; }).filter(Boolean);
+  } catch(e) { return []; }
+}
+
+async function syncAndGetCustomOsServices() {
+  const local = loadCustomOsServicesLocal();
+  const remote = await loadCustomOsServicesFromFirebase();
+  const merged = Array.from(new Set(local.concat(remote)));
+  saveCustomOsServicesLocal(merged);
+  return merged;
+}
+
+async function addCustomOsServiceFromInput() {
+  const inp = document.getElementById('os-custom-service-input');
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) { inp.focus(); return; }
+
+  const list = loadCustomOsServicesLocal();
+  if (list.map(function(s){ return s.toLowerCase(); }).includes(name.toLowerCase())) {
+    showToast('⚠ Service already exists');
+    return;
+  }
+
+  list.push(name);
+  saveCustomOsServicesLocal(list);
+  inp.value = '';
+
+  // Save to Firebase in background
+  saveCustomOsServiceToFirebase(name);
+
+  renderOsServiceOptions();
+  showToast('✅ Service "' + name + '" added');
+}
+
+async function removeCustomOsService(name) {
+  const list = loadCustomOsServicesLocal().filter(function(s){ return s !== name; });
+  saveCustomOsServicesLocal(list);
+
+  // Remove from _osSelectedServiceTypes if selected
+  if (window._osSelectedServiceTypes) {
+    window._osSelectedServiceTypes = window._osSelectedServiceTypes.filter(function(s){ return s !== name; });
+  }
+
+  // Delete from Firebase in background
+  deleteCustomOsServiceFromFirebase(name);
+
+  renderOsServiceOptions();
+  updateOsServicesList();
+  showToast('🗑 Service "' + name + '" removed');
+}
+
 function renderOsServiceOptions() {
   const category = document.getElementById('os-service-category')?.value || 'DL';
   const container = document.getElementById('os-service-type');
   if (!container) return;
-  const options = {
+
+  const PRESET = {
     DL: [
       'Fresh Driving License (FDL)',
       'Duplicate Driving License (DDL)',
@@ -15091,6 +15733,7 @@ function renderOsServiceOptions() {
       'Temporary Registration (TR)'
     ]
   };
+
   const query = document.getElementById('os-service-search')?.value.toLowerCase().trim() || '';
   if (window._osServiceOptionsCategory !== category) {
     window._osSelectedServiceTypes = [];
@@ -15100,17 +15743,68 @@ function renderOsServiceOptions() {
   window._osSelectedServiceTypes = window._osSelectedServiceTypes || [];
   window._osSelectedServiceTypes = Array.from(new Set(window._osSelectedServiceTypes.concat(currentChecked)));
 
-  const items = options[category] || [];
-  const visible = query ? items.filter(function(opt) { return opt.toLowerCase().includes(query); }) : items;
-  if (visible.length === 0) {
-    container.innerHTML = '<div style="padding:12px;color:var(--text2);font-size:13px;">No matching services found.</div>';
-  } else {
-    container.innerHTML = visible.map(function(opt) {
-      return '<label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="os-service-type-cb" value="' + opt + '" onchange="updateOsServicesList()">' + opt + '</label>';
-    }).join('');
+  if (category === 'Others') {
+    const customList = loadCustomOsServicesLocal();
+    const visible = query ? customList.filter(function(opt) { return opt.toLowerCase().includes(query); }) : customList;
+
+    let checkboxesHtml = '';
+    if (visible.length === 0 && !query) {
+      checkboxesHtml = '<div style="padding:8px;color:var(--text2);font-size:12px;">No custom services yet. Add one below.</div>';
+    } else if (visible.length === 0 && query) {
+      checkboxesHtml = '<div style="padding:8px;color:var(--text2);font-size:12px;">No matching services.</div>';
+    } else {
+      checkboxesHtml = visible.map(function(opt) {
+        return '<label style="display:flex;align-items:center;gap:6px;padding:2px 0;">' +
+          '<input type="checkbox" name="os-service-type-cb" value="' + opt.replace(/"/g,'&quot;') + '" onchange="updateOsServicesList()">' +
+          '<span style="flex:1;font-size:13px;">' + opt + '</span>' +
+          '<button type="button" title="Remove service" onclick="removeCustomOsService(\'' + opt.replace(/'/g,"\\'") + '\')" ' +
+            'style="background:none;border:none;cursor:pointer;color:#dc2626;font-size:14px;padding:0 2px;line-height:1;">✕</button>' +
+        '</label>';
+      }).join('');
+    }
+
+    container.innerHTML =
+      checkboxesHtml +
+      '<div style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;">' +
+        '<div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;">➕ Add New Service</div>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<input type="text" id="os-custom-service-input" placeholder="Type service name…" ' +
+            'style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:\'DM Sans\';" ' +
+            'onkeydown="if(event.key===\'Enter\'){event.preventDefault();addCustomOsServiceFromInput();}">' +
+          '<button type="button" class="btn btn-accent btn-sm" onclick="addCustomOsServiceFromInput()" style="white-space:nowrap;">+ Add</button>' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:5px;">Saved to your school — available every time. Press Enter or click Add.</div>' +
+      '</div>';
+
+    // Re-apply checkmarks
     Array.from(container.querySelectorAll('input[name="os-service-type-cb"]')).forEach(function(input) {
       if (window._osSelectedServiceTypes.includes(input.value)) input.checked = true;
     });
+
+    // Lazy sync from Firebase (no await — runs in background and refreshes)
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      loadCustomOsServicesFromFirebase().then(function(remote) {
+        const local = loadCustomOsServicesLocal();
+        const merged = Array.from(new Set(local.concat(remote)));
+        if (merged.length !== local.length) {
+          saveCustomOsServicesLocal(merged);
+          renderOsServiceOptions(); // refresh with newly synced entries
+        }
+      });
+    }
+  } else {
+    const items = PRESET[category] || [];
+    const visible = query ? items.filter(function(opt) { return opt.toLowerCase().includes(query); }) : items;
+    if (visible.length === 0) {
+      container.innerHTML = '<div style="padding:12px;color:var(--text2);font-size:13px;">No matching services found.</div>';
+    } else {
+      container.innerHTML = visible.map(function(opt) {
+        return '<label style="display:flex;align-items:center;gap:8px;"><input type="checkbox" name="os-service-type-cb" value="' + opt + '" onchange="updateOsServicesList()">' + opt + '</label>';
+      }).join('');
+      Array.from(container.querySelectorAll('input[name="os-service-type-cb"]')).forEach(function(input) {
+        if (window._osSelectedServiceTypes.includes(input.value)) input.checked = true;
+      });
+    }
   }
   updateOsServicesList();
 }
@@ -15246,17 +15940,19 @@ async function saveOtherService() {
   try {
     if (agentName) ensureAgentRegistered(agentName);
     if (currentSchoolId && typeof db !== 'undefined') {
-      const serviceSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/otherServices', null, serviceData);
-      serviceData.id = 'srv-' + Date.now();
-      serviceData.firebaseId = serviceData.id;
-      FGCache.invalidate(currentSchoolId, 'otherServices');
-      EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {});
-      
-      if (serviceSuccess) {
+      try {
+        const docRef = await db.collection('schools').doc(currentSchoolId).collection('otherServices').add(serviceData);
+        serviceData.id = docRef.id;
+        serviceData.firebaseId = docRef.id;
         addNotification(`✅ Service for ${clientName} synced to Firebase`, 'success');
-      } else {
+      } catch(fbErr) {
+        console.warn('Firebase write failed, using local id:', fbErr.message);
+        serviceData.id = 'srv-' + Date.now();
+        serviceData.firebaseId = serviceData.id;
         addNotification(`⏳ Service queued for sync`, 'info');
       }
+      FGCache.invalidate(currentSchoolId, 'otherServices');
+      EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {});
     } else {
       serviceData.id = 'local-' + Date.now();
     }
@@ -15342,7 +16038,7 @@ function viewOtherService(id) {
     <div style="margin-bottom:16px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div style="font-family:'Syne';font-size:14px;font-weight:600;">💳 Payment History</div>
-        ${bal>0?`<button class="btn btn-accent btn-sm" onclick="openAddServiceInstallment(${JSON.stringify(svc.id||svc.firebaseId)})">+ Add Payment</button>`:'<span class="badge badge-green">✓ Fully Paid</span>'}
+        ${bal>0?`<button class="btn btn-accent btn-sm" onclick="openAddServiceInstallment('${svc.id||svc.firebaseId}')">+ Add Payment</button>`:'<span class="badge badge-green">✓ Fully Paid</span>'}
       </div>
       <table class="data-table">
         <thead><tr><th>Date</th><th>Amount</th><th>Mode</th><th>Note</th></tr></thead>
@@ -15353,17 +16049,17 @@ function viewOtherService(id) {
         </tbody>
       </table>
     </div>
-    <div id="service-install-form-${svc.id}" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:14px;">
+    <div id="service-install-form-${svc.id||svc.firebaseId}" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px;margin-bottom:14px;">
       <div style="font-weight:600;margin-bottom:10px;">Add Payment</div>
       <div class="form-grid">
-        <div class="form-group"><label>Date</label><input type="date" id="si-date-${svc.id}" value="${new Date().toISOString().split('T')[0]}"></div>
-        <div class="form-group"><label>Amount (₹)</label><input type="number" id="si-amount-${svc.id}" placeholder="Enter amount" max="${bal}"></div>
-        <div class="form-group"><label>Mode</label><select id="si-mode-${svc.id}"><option>Cash</option><option>UPI</option><option>Bank Transfer</option></select></div>
-        <div class="form-group"><label>Note</label><input type="text" id="si-note-${svc.id}" placeholder="Optional"></div>
+        <div class="form-group"><label>Date</label><input type="date" id="si-date-${svc.id||svc.firebaseId}" value="${new Date().toISOString().split('T')[0]}"></div>
+        <div class="form-group"><label>Amount (₹)</label><input type="number" id="si-amount-${svc.id||svc.firebaseId}" placeholder="Enter amount" max="${bal}"></div>
+        <div class="form-group"><label>Mode</label><select id="si-mode-${svc.id||svc.firebaseId}"><option>Cash</option><option>UPI</option><option>Bank Transfer</option></select></div>
+        <div class="form-group"><label>Note</label><input type="text" id="si-note-${svc.id||svc.firebaseId}" placeholder="Optional"></div>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;">
-        <button class="btn btn-success btn-sm" onclick="saveServiceInstallment(${JSON.stringify(svc.id)})">Save</button>
-        <button class="btn btn-outline btn-sm" onclick="document.getElementById('service-install-form-${svc.id}').style.display='none'">Cancel</button>
+        <button class="btn btn-success btn-sm" onclick="saveServiceInstallment('${svc.id||svc.firebaseId}')">Save</button>
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('service-install-form-${svc.id||svc.firebaseId}').style.display='none'">Cancel</button>
       </div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap;">
@@ -15720,34 +16416,31 @@ function sendDailyIncomeExpenseSummary() {
   const profit = totalIncome - totalExpense;
 
   // Count number of classes scheduled for today
-  const scheduleEntries = Object.values(data.dailySchedule || {}).filter(function(item) {
-    return item && (!currentSchoolId || item.schoolId === currentSchoolId);
-  });
-  const classesCount = scheduleEntries.length;
-  const completedClassesCount = scheduleEntries.filter(function(item) {
-    const status = String(item.status || item.classStatus || '').toLowerCase();
-    return status === 'completed' || status === 'done' || status === 'complete' || status === 'finished';
-  }).length;
+  const classesCount = Object.keys(data.dailySchedule || {}).length;
 
-  const countPresent = function(attMap) {
-    return Object.values(attMap || {}).filter(function(att) {
-      return att && (att.status === 'present' || att.status === 'late');
-    }).length;
-  };
-
+  // Count number of staff present today (admin + instructors)
+  let staffPresentCount = 0;
   const adminAttToday = data.adminAttendance && data.adminAttendance[today] ? data.adminAttendance[today] : {};
   const instAttToday = data.instructorAttendance && data.instructorAttendance[today] ? data.instructorAttendance[today] : {};
-  const staffAttToday = data.staffAttendance && data.staffAttendance[today] ? data.staffAttendance[today] : {};
-  const staffPresentCount = countPresent(adminAttToday) + countPresent(instAttToday) + countPresent(staffAttToday);
+  
+  // Count admins present (status is 'present' or 'late')
+  Object.values(adminAttToday).forEach(att => {
+    if (att && (att.status === 'present' || att.status === 'late')) staffPresentCount++;
+  });
+  
+  // Count instructors present (status is 'present' or 'late')
+  Object.values(instAttToday).forEach(att => {
+    if (att && (att.status === 'present' || att.status === 'late')) staffPresentCount++;
+  });
 
-  const msg = `📊 Daily Summary (${today}): Income ₹${totalIncome.toLocaleString()} | Expense ₹${totalExpense.toLocaleString()} | Net ${profit>=0?'+':''}₹${profit.toLocaleString()} | Classes Scheduled: ${classesCount} | Classes Completed: ${completedClassesCount} | Staff Present: ${staffPresentCount}`;
+  const msg = `📊 Daily Summary (${today}): Income ₹${totalIncome.toLocaleString()} | Expense ₹${totalExpense.toLocaleString()} | Net ${profit>=0?'+':''}₹${profit.toLocaleString()} | Classes: ${classesCount} | Staff Present: ${staffPresentCount}`;
   addNotification(msg, profit >= 0 ? 'success' : 'warning');
   // Show toast
   showToast(msg.substring(0, 80));
   // Also try browser notification
   if ('Notification' in window && Notification.permission === 'granted') {
     new Notification('First Gear Daily Summary', {
-      body: `Income: ₹${totalIncome.toLocaleString()} | Expense: ₹${totalExpense.toLocaleString()} | Net: ₹${profit.toLocaleString()} | Classes Scheduled: ${classesCount} | Classes Completed: ${completedClassesCount} | Staff Present: ${staffPresentCount}`,
+      body: `Income: ₹${totalIncome.toLocaleString()} | Expense: ₹${totalExpense.toLocaleString()} | Net: ₹${profit.toLocaleString()} | Classes: ${classesCount} | Staff Present: ${staffPresentCount}`,
       icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="75" font-size="75">🚗</text></svg>'
     });
   }
@@ -16013,6 +16706,24 @@ async function addAdminFromModal() {
       if (authErr.code === 'auth/email-already-in-use') {
         addNotification('This email already has a Firebase account. The admin can log in but may need the owner to fix their access doc.', 'warning');
         // We don't know the UID client-side; skip UID-based write
+      } else if (
+        authErr.code === 'auth/admin-restricted-operation' ||
+        authErr.code === 'auth/operation-not-allowed'
+      ) {
+        // Firebase project has Email Enumeration Protection enabled OR
+        // Email/Password sign-in is disabled in the Firebase console.
+        // We cannot create Auth accounts from the client in this mode.
+        // Save the Firestore record anyway (without a UID) so data is not lost,
+        // then show a clear actionable message to the owner.
+        console.warn('Firebase Auth account creation blocked (' + authErr.code + '). Saving record without UID.');
+        addNotification(
+          '⚠️ Firebase blocked account creation (' + authErr.code + '). ' +
+          'Go to Firebase Console → Authentication → Settings and either ' +
+          'disable "Email Enumeration Protection" or enable Email/Password sign-in. ' +
+          'The admin record was saved — use "🔧 Fix Login Access" after enabling Auth.',
+          'warning'
+        );
+        // adminUid stays null → falls through to auto-ID save path below
       } else {
         throw authErr;
       }
@@ -16079,13 +16790,37 @@ async function addAdminFromModal() {
     document.getElementById('perm-attendance').checked = true;
     document.getElementById('perm-reports').checked = true;
     
+    // Update local data immediately so the table reflects the new admin
+    // without requiring a page reload or re-navigation.
+    const newAdminEntry = { id: adminUid || email, firebaseId: adminUid || email, ...adminData };
+    if (!data.admins) data.admins = [];
+    const existingIdx = data.admins.findIndex(a => a.email === email);
+    if (existingIdx >= 0) {
+      data.admins[existingIdx] = newAdminEntry;
+    } else {
+      data.admins.push(newAdminEntry);
+    }
+    // Bust the stale cache so next visit re-fetches from Firestore
+    try { FGCache.invalidate(currentSchoolId, 'admins'); } catch(_e){}
+
     closeModal('modal-add-admin');
     renderAdminsTable();
     addNotification(`Administrator "${name}" has been added successfully`, 'success');
     
   } catch (error) {
     console.error('Error adding admin:', error);
-    alert('Error adding administrator. Please try again.');
+    const friendlyMsg = {
+      'auth/weak-password':           'Password must be at least 6 characters.',
+      'auth/invalid-email':           'The email address is not valid.',
+      'auth/email-already-in-use':    'This email already has a Firebase account.',
+      'auth/admin-restricted-operation':
+        'Firebase Email Enumeration Protection is blocking account creation.\n\n' +
+        'Fix: Firebase Console → Authentication → Settings → disable "Email Enumeration Protection", then try again.',
+      'auth/operation-not-allowed':
+        'Email/Password sign-in is not enabled in Firebase.\n\n' +
+        'Fix: Firebase Console → Authentication → Sign-in method → enable Email/Password.',
+    }[error.code];
+    alert(friendlyMsg || ('Error adding administrator: ' + (error.message || error.code || 'Unknown error')));
   } finally {
     if (secondaryAuth) {
       try { await secondaryAuth.signOut(); } catch (e) { console.warn('Secondary admin sign-out failed:', e.message); }
@@ -16392,6 +17127,8 @@ async function updateAdmin(adminId) {
     document.getElementById('perm-attendance').checked = true;
     document.getElementById('perm-reports').checked = true;
     
+    // Bust cache so re-navigating to admin page re-fetches fresh data
+    try { FGCache.invalidate(currentSchoolId, 'admins'); } catch(_e){}
     closeModal('modal-add-admin');
     renderAdminsTable();
     addNotification(`Administrator "${name}" has been updated successfully`, 'success');
@@ -16794,7 +17531,8 @@ async function addStaffFromModal() {
       transactions: document.getElementById('staff-perm-transactions').checked,
       attendance: document.getElementById('staff-perm-attendance').checked,
       reports: document.getElementById('staff-perm-reports').checked,
-      dashboard: document.getElementById('staff-perm-dashboard').checked
+      dashboard: document.getElementById('staff-perm-dashboard').checked,
+      otherStudents: role === 'instructor' ? document.getElementById('staff-perm-other-students').checked : false
     };
     
     // Validation
@@ -16898,10 +17636,6 @@ async function addStaffFromModal() {
       console.warn('Could not write users membership doc (check Firestore rules):', usersErr.message);
     }
 
-    // NOTE: Do NOT manually push to data.staff here.
-    // The real-time Firestore snapshot listener (setupRealtimeListeners) already
-    // picks up the new doc and adds it — a manual push here would cause a duplicate entry.
-
     // Write userSchools top-level index so the new staff member can log in
     let ownerEmail = null;
     try {
@@ -16938,6 +17672,18 @@ async function addStaffFromModal() {
     document.getElementById('staff-work-type').value = 'full-time';
     document.getElementById('staff-notes').value = '';
     
+    // Update local data immediately — no real-time listener exists for the staff collection
+    const newStaffEntry = { id: staffUid, firebaseId: staffUid, ...staffData };
+    if (!data.staff) data.staff = [];
+    const existingStaffIdx = data.staff.findIndex(s => s.email === email);
+    if (existingStaffIdx >= 0) {
+      data.staff[existingStaffIdx] = newStaffEntry;
+    } else {
+      data.staff.push(newStaffEntry);
+    }
+    // Bust stale cache so re-navigating to staff page re-fetches fresh data
+    try { FGCache.invalidate(currentSchoolId, 'staff'); } catch(_e){}
+
     closeModal('modal-add-staff');
     renderStaffTable();
     addNotification(`Staff member "${name}" has been added successfully`, 'success');
@@ -16989,12 +17735,14 @@ async function editStaff(staffId) {
     document.getElementById('staff-salary').value = staff.salary || '';
     document.getElementById('staff-work-type').value = staff.workType || 'full-time';
     document.getElementById('staff-notes').value = staff.notes || '';
-    const perms = staff.permissions || { students: false, transactions: false, attendance: false, reports: false, dashboard: false };
+    const perms = staff.permissions || { students: false, transactions: false, attendance: false, reports: false, dashboard: false, otherStudents: false };
     document.getElementById('staff-perm-students').checked = Boolean(perms.students);
     document.getElementById('staff-perm-transactions').checked = Boolean(perms.transactions);
     document.getElementById('staff-perm-attendance').checked = Boolean(perms.attendance);
     document.getElementById('staff-perm-reports').checked = Boolean(perms.reports);
     document.getElementById('staff-perm-dashboard').checked = Boolean(perms.dashboard);
+    document.getElementById('staff-perm-other-students').checked = Boolean(perms.otherStudents);
+    toggleStaffOtherStudentsPerm();
     
     // Change button text and onclick
     const submitBtn = document.getElementById('staff-modal-submit');
@@ -17030,7 +17778,8 @@ async function updateStaff(staffId) {
       transactions: document.getElementById('staff-perm-transactions').checked,
       attendance: document.getElementById('staff-perm-attendance').checked,
       reports: document.getElementById('staff-perm-reports').checked,
-      dashboard: document.getElementById('staff-perm-dashboard').checked
+      dashboard: document.getElementById('staff-perm-dashboard').checked,
+      otherStudents: role === 'instructor' ? document.getElementById('staff-perm-other-students').checked : false
     };
     
     // Validation
@@ -17119,6 +17868,7 @@ async function updateStaff(staffId) {
     document.getElementById('staff-perm-reports').checked = false;
     document.getElementById('staff-notes').value = '';
     
+    try { FGCache.invalidate(currentSchoolId, 'staff'); } catch(_e){}
     closeModal('modal-add-staff');
     renderStaffTable();
     addNotification(`Staff member "${name}" has been updated successfully`, 'success');
@@ -17191,10 +17941,26 @@ function resetStaffModalFields() {
   document.getElementById('staff-perm-attendance').checked = false;
   document.getElementById('staff-perm-reports').checked = false;
   document.getElementById('staff-perm-dashboard').checked = false;
+  document.getElementById('staff-perm-other-students').checked = false;
+  toggleStaffOtherStudentsPerm();
   const submitBtn = document.getElementById('staff-modal-submit');
   if (submitBtn) {
     submitBtn.textContent = 'Add Staff';
     submitBtn.onclick = addStaffFromModal;
+  }
+}
+
+// Show the "Pick Students From Other Classes" checkbox only when role is Instructor
+function toggleStaffOtherStudentsPerm() {
+  const role = document.getElementById('staff-role')?.value;
+  const wrap = document.getElementById('staff-perm-other-students-wrap');
+  if (!wrap) return;
+  if (role === 'instructor') {
+    wrap.style.display = 'flex';
+  } else {
+    wrap.style.display = 'none';
+    const cb = document.getElementById('staff-perm-other-students');
+    if (cb) cb.checked = false;
   }
 }
 
@@ -17934,7 +18700,7 @@ function openAddFormModal(formType, studentId) {
   updateFormTypeDisplay(_activeFormType);
   _showFormFields(_activeFormType);
   ['fm-serialNo','fm-candidateName','fm-phone','fm-address','fm-vehicleClass',
-   'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice','fm-rtoOffice14',
+   'fm-vehicleNumber','fm-startDate','fm-endDate','fm-rtoOffice',
    'fm-guardianName','fm-dob','fm-enrollDate','fm-endDate14',
    'fm-llNumber','fm-llValidity','fm-dlNumber','fm-dlValidFrom','fm-dlValidTo',
    'fm-llAppNumber','fm-llAppDob','fm-dlAppNumber','fm-dlAppDob',
@@ -17956,8 +18722,7 @@ function openAddFormModal(formType, studentId) {
 }
 
 function editFormRecord(id) {
-  var forms = Array.isArray(data.forms) ? data.forms : [];
-  var f = forms.find(function(x){ return (x.firebaseId||x.id)===id; });
+  var f = (data.forms||[]).find(function(x){ return (x.firebaseId||x.id)===id; });
   if (!f) { showToast('Record not found'); return; }
   if (!currentSchoolId && f.schoolId) {
     currentSchoolId = f.schoolId;
@@ -17998,8 +18763,6 @@ function editFormRecord(id) {
     set('fm-dlNumber',      f.dlNumber);
     set('fm-dlValidFrom',   f.dlValidFrom);
     set('fm-dlValidTo',     f.dlValidTo);
-    set('fm-rtoOffice14',   f.rtoOffice || f.licensingAuthority || '');
-    set('fm-remarks',       f.remarks);
     set('fm-llAppNumber',   f.llAppNumber);
     set('fm-llAppDob',      f.llAppDob);
     set('fm-dlAppNumber',   f.dlAppNumber);
@@ -18026,9 +18789,7 @@ async function deleteFormRecord(id) {
   var dbReady = (typeof db !== 'undefined' && db !== null);
   try {
     if (currentSchoolId && dbReady) { await db.collection('forms').doc(id).delete(); }
-    data.forms = Array.isArray(data.forms)
-      ? data.forms.filter(function(f){ return (f.firebaseId||f.id)!==id; })
-      : [];
+    data.forms = (data.forms||[]).filter(function(f){ return (f.firebaseId||f.id)!==id; });
     if (_activeFormType === 'Form 5' || _activeFormType === 'Form 14') {
       renderFormsRegistry(_activeFormType);
     } else if (_activeFormType === 'Form 15') {
@@ -18058,7 +18819,6 @@ async function saveFormRecord() {
     return;
   }
 
-  var forms = Array.isArray(data.forms) ? data.forms : [];
   var record = {
     formType:      _activeFormType,
     schoolId:      selectedSchoolId,
@@ -18086,7 +18846,6 @@ async function saveFormRecord() {
     record.dob           = get('fm-dob');
     record.enrollDate    = get('fm-enrollDate');
     record.endDate       = get('fm-endDate14');
-    record.rtoOffice     = get('fm-rtoOffice14') || get('fm-rtoOffice') || '';
     record.llNumber      = get('fm-llNumber');
     record.llValidity    = get('fm-llValidity');
     record.dlNumber      = get('fm-dlNumber');
@@ -18100,7 +18859,7 @@ async function saveFormRecord() {
     if (_formPhotoDataURL) {
       record.photoDataUrl = _formPhotoDataURL;
     } else if (_editingFormId) {
-      var existingForm = forms.find(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
+      var existingForm = (data.forms || []).find(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
       if (existingForm && existingForm.photoDataUrl) record.photoDataUrl = existingForm.photoDataUrl;
     }
   }
@@ -18108,11 +18867,8 @@ async function saveFormRecord() {
   try {
     if (_editingFormId) {
       if (selectedSchoolId && dbReady) { await db.collection('forms').doc(_editingFormId).update(record); }
-      var idx = forms.findIndex(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
-      if (idx !== -1) {
-        forms[idx] = Object.assign({}, forms[idx], record);
-        data.forms = forms;
-      }
+      var idx = (data.forms||[]).findIndex(function(f){ return (f.firebaseId||f.id)===_editingFormId; });
+      if (idx !== -1) data.forms[idx] = Object.assign({}, data.forms[idx], record);
       addNotification(_activeFormType + ' record updated', 'success');
     } else {
       record.createdAt = new Date().toISOString();
@@ -18123,7 +18879,7 @@ async function saveFormRecord() {
       }
       record.firebaseId = newId;
       record.id = newId;
-      data.forms = forms;
+      if (!data.forms) data.forms = [];
       data.forms.push(record);
       addNotification(_activeFormType + ' record added', 'success');
     }
@@ -18349,7 +19105,7 @@ function populateFormFromStudentId(value) {
         </div>
         <div class="form-group">
           <label>Licensing Authority</label>
-          <input type="text" id="fm-rtoOffice14" placeholder="RTO / licensing authority">
+          <input type="text" id="fm-rtoOffice" placeholder="RTO / licensing authority">
         </div>
         <div class="form-group full">
           <label>Upload Trainee Photo</label>
