@@ -1,0 +1,41 @@
+{
+  "packageId": "online.firstgear.app",
+  "host": "firstgear.online",
+  "name": "First Gear – Driving School",
+  "launcherName": "First Gear",
+  "display": "standalone",
+  "orientation": "portrait",
+  "themeColor": "#1a2744",
+  "navigationColor": "#1a2744",
+  "navigationColorDark": "#1a2744",
+  "navigationDividerColor": "#1a2744",
+  "navigationDividerColorDark": "#1a2744",
+  "backgroundColor": "#1a2744",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://firstgear.online/icons/icon-512.png",
+  "maskableIconUrl": "https://firstgear.online/icons/icon-512.png",
+  "monochromeIconUrl": "https://firstgear.online/icons/icon-512.png",
+  "appVersion": "1",
+  "appVersionName": "1.0.0",
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://firstgear.online/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {
+    "locationDelegation": {
+      "enabled": false
+    },
+    "playBilling": {
+      "enabled": false
+    }
+  },
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "minSdkVersion": 21,
+  "fingerprints": []
+}
