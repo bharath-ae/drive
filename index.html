@@ -868,7 +868,10 @@
       <div class="page" id="page-cashflow">
         <div class="page-header">
           <div><h2>Daily Cash Flow</h2><p>Income & expenditure management</p></div>
-          <button class="btn btn-accent" data-action="add_transaction" onclick="openModal('modal-add-tx')">+ Add Entry</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-outline" id="cf-fix-mismatches-btn" style="border-color:var(--warning);color:var(--warning);" onclick="fixAllEnrollmentDateMismatches()" title="Scans all Student Fee entries and moves any that don't match the student's enrolled date">📅 Fix Date Mismatches</button>
+            <button class="btn btn-accent" data-action="add_transaction" onclick="openModal('modal-add-tx')">+ Add Entry</button>
+          </div>
         </div>
         <div class="cf-summary" id="cf-summary"></div>
         <div class="card">
@@ -915,6 +918,11 @@
       <!-- DATA IMPORT PAGE -->
       <div class="page" id="page-data-import">
         <div id="import-page-content"></div>
+      </div>
+
+      <!-- DATA REPAIR PAGE -->
+      <div class="page" id="page-data-repair">
+        <div id="data-repair-content"></div>
       </div>
 
       <!-- OFFICE PAGES -->
@@ -4661,16 +4669,16 @@ const SyncManager = {
       if (!path) return false;
       
       if (operation === 'set') {
-        await db.collection(path.split('/')[0]).doc(path.split('/')[1]).set(data, { merge: true });
+        await db.doc(path).set(data, { merge: true });
         return true;
       } else if (operation === 'update') {
-        await db.collection(path.split('/')[0]).doc(path.split('/')[1]).update(data);
+        await db.doc(path).update(data);
         return true;
       } else if (operation === 'add') {
         await db.collection(path).add(data);
         return true;
       } else if (operation === 'delete') {
-        await db.collection(path.split('/')[0]).doc(path.split('/')[1]).delete();
+        await db.doc(path).delete();
         return true;
       }
       return false;
@@ -4733,17 +4741,26 @@ const DataWriter = {
   },
 
   async executeWrite(operation, collection, docId, data) {
-    const path = docId ? `${collection}/${docId}` : collection;
-    const parts = path.split('/');
+    // Build a proper Firestore reference that supports nested paths like
+    // 'schools/{schoolId}/students'. db.collection(path) and db.doc(path)
+    // both accept full slash-delimited paths natively, so we no longer
+    // naively split on '/' and grab parts[0]/parts[1] (which broke for
+    // any collection path with more than 2 segments).
+    if (operation === 'add') {
+      return await db.collection(collection).add(data);
+    }
+
+    if (!docId) {
+      throw new Error(`DataWriter.executeWrite: docId is required for "${operation}" on ${collection}`);
+    }
+    const docPath = `${collection}/${docId}`;
 
     if (operation === 'set') {
-      return await db.collection(parts[0]).doc(parts[1]).set(data, { merge: true });
+      return await db.doc(docPath).set(data, { merge: true });
     } else if (operation === 'update') {
-      return await db.collection(parts[0]).doc(parts[1]).update(data);
-    } else if (operation === 'add') {
-      return await db.collection(collection).add(data);
+      return await db.doc(docPath).update(data);
     } else if (operation === 'delete') {
-      return await db.collection(parts[0]).doc(parts[1]).delete();
+      return await db.doc(docPath).delete();
     }
   }
 };
@@ -5960,6 +5977,7 @@ const navConfig = {
       {id:'notifications',icon:'&#128226;',label:'Notifications'},
       {id:'reports',icon:'&#128200;',label:'Reports'},
       {id:'data-import',icon:'&#128228;',label:'Import Data'},
+      {id:'data-repair',icon:'&#128295;',label:'Fix Enrollment Dates'},
       {id:'admin-management',icon:'&#128100;',label:'Admin Management'},
       {id:'staff-management',icon:'&#128104;',label:'Staff Management'},
     ]},
@@ -5985,6 +6003,7 @@ const navConfig = {
       {id:'dl-tests',icon:'&#128990;',label:'DL Tests'},
       {id:'notifications',icon:'&#128226;',label:'Notifications'},
       {id:'data-import',icon:'&#128228;',label:'Import Data'},
+      {id:'data-repair',icon:'&#128295;',label:'Fix Enrollment Dates'},
       {id:'office-attendance',icon:'&#9989;',label:'My Attendance'},
       {id:'owner-attendance',icon:'&#128202;',label:'Staff Attendance'},
       {id:'staff-management',icon:'&#128104;',label:'Staff Management'},
@@ -6176,14 +6195,14 @@ function hasPageAccess(pageId) {
       'owner-fuel', 'vehicles', 'owner-attendance',
       'other-services', 'student-tracking', 'dl-tests', 'notifications', 'add-student',
       'forms-registry', 'form14-registry', 'form15-registry', 'agents', 'form5-print', 'form14-print',
-      'data-import'
+      'data-import', 'data-repair'
     ],
     office: [
       'dashboard', 'all-students', 'cashflow', 'reports',
       'dl-tests', 'notifications', 'office-attendance', 'owner-attendance',
       'class-schedule', 'instructor', 'staff-management',
       'other-services', 'add-student', 'forms-registry', 'form14-registry', 'form15-registry',
-      'data-import'
+      'data-import', 'data-repair'
     ],
     instructor: [
       'dashboard', 'my-students', 'other-students', 'attendance', 'petrol'
@@ -7113,6 +7132,7 @@ function refreshPage(id) {
   }
   else if(id==='add-student') { /* static form page, no render needed */ }
   else if(id==='data-import') renderImportPage();
+  else if(id==='data-repair') renderDataRepairPage();
 }
 
 // ============================================================
@@ -9112,6 +9132,7 @@ async function addStudentFromModal() {
     const qsInstEl = document.getElementById('qs-instructor');
     const qsInstValue = qsInstEl ? qsInstEl.value : '';
     const qsInstName = qsInstEl ? (qsInstEl.options[qsInstEl.selectedIndex] ? qsInstEl.options[qsInstEl.selectedIndex].text : qsInstValue) : '';
+    const enrolledDate = document.getElementById('qs-enrolled').value || new Date().toISOString().split('T')[0];
     const studentData = {
       name, phone,
       createdAt: new Date().toISOString(),
@@ -9128,9 +9149,9 @@ async function addStudentFromModal() {
       totalClasses,
       totalFee: parseInt(document.getElementById('qs-fee').value)||0,
       paid: amountPaid,
-      installments: amountPaid > 0 ? [{ date: new Date().toISOString().split('T')[0], amount: amountPaid, mode: paymentMode, note: 'Initial payment' }] : [],
+      installments: amountPaid > 0 ? [{ date: enrolledDate, amount: amountPaid, mode: paymentMode, note: 'Initial payment' }] : [],
       status: document.getElementById('qs-status').value,
-      enrolled: document.getElementById('qs-enrolled').value || new Date().toISOString().split('T')[0],
+      enrolled: enrolledDate,
       dob: document.getElementById('qs-dob').value || '',
       address: document.getElementById('qs-address').value || '',
       email: document.getElementById('qs-email').value || '',
@@ -9192,7 +9213,7 @@ async function addStudentFromModal() {
 
     if (amountPaid > 0) {
       const transactionData = {
-        date: new Date().toISOString().split('T')[0],
+        date: enrolledDate,
         type: 'income',
         category: 'Student Fee',
         desc: `Student enrollment fee: ${name}`,
@@ -9245,7 +9266,7 @@ async function enrollStudent() {
       totalFee: parseInt(document.getElementById('s-fee').value)||0,
       paid: paidAmt,
       fcmToken: document.getElementById('s-fcm-token') ? document.getElementById('s-fcm-token').value.trim() : '',
-      installments: paidAmt > 0 ? [{ date: new Date().toISOString().split('T')[0], amount: paidAmt, mode: 'Cash', note: 'Initial payment' }] : [],
+      installments: paidAmt > 0 ? [{ date: document.getElementById('s-enroll').value || new Date().toISOString().split('T')[0], amount: paidAmt, mode: 'Cash', note: 'Initial payment' }] : [],
       status: 'Active',
       enrolled: document.getElementById('s-enroll').value || new Date().toISOString().split('T')[0],
       dob: document.getElementById('s-dob').value,
@@ -9281,6 +9302,239 @@ function clearEnrollForm() {
   ['s-name','s-dob','s-phone','s-email','s-fcm-token','s-address','s-aadhaar','s-fee','s-paid','s-enroll','s-emergency','s-agent'].forEach(id => {
     const el = document.getElementById(id); if(el) el.value='';
   });
+}
+
+// ============================================================
+// DATA REPAIR — fix enrollment-fee dates on already-saved records
+// (one-time tool to correct records saved before the date-mapping
+// fix: initial installments / income entries that were stored with
+// the day they were entered instead of the student's Enrolled date)
+//
+// Always reads fresh from Firestore (not data.students/data.transactions)
+// because the in-memory cache may not have fully loaded yet when this
+// page is opened, which previously caused real mismatches to be missed.
+// Matching is intentionally broad (not just an exact studentId match)
+// so it also catches older/legacy records, and fixes are applied in
+// batched Firestore writes so it stays fast for large student lists.
+// ============================================================
+async function scanEnrollmentDateIssues() {
+  if (!currentSchoolId || typeof db === 'undefined') return [];
+
+  let students = [];
+  let feeTx = [];
+
+  try {
+    const studentsSnap = await db.collection('schools').doc(currentSchoolId).collection('students').get();
+    students = studentsSnap.docs.map(d => ({ firebaseId: d.id, id: d.id, ...d.data() }));
+  } catch (e) {
+    console.warn('Could not fetch students fresh, falling back to in-memory:', e.message);
+    students = (data.students || []).filter(s => !currentSchoolId || s.schoolId === currentSchoolId);
+  }
+
+  try {
+    const txSnap = await db.collection('schools').doc(currentSchoolId).collection('transactions')
+      .where('category', '==', 'Student Fee').get();
+    feeTx = txSnap.docs.map(d => ({ firebaseId: d.id, id: d.id, ...d.data() }));
+  } catch (e) {
+    console.warn('Could not fetch transactions fresh, falling back to in-memory:', e.message);
+    feeTx = (data.transactions || []).filter(t => (!currentSchoolId || t.schoolId === currentSchoolId) && t.category === 'Student Fee');
+  }
+
+  const usedTxIds = new Set(); // avoid matching the same transaction to two students
+  const issues = [];
+
+  students.forEach(s => {
+    const sid = s.firebaseId || s.id;
+    if (!s.enrolled || !sid) return;
+    const nameLower = (s.name || '').trim().toLowerCase();
+
+    // 1) The first installment recorded at enrollment time
+    if (Array.isArray(s.installments) && s.installments.length > 0) {
+      const first = s.installments[0];
+      if (first && first.note === 'Initial payment' && first.date && first.date !== s.enrolled) {
+        issues.push({
+          type: 'installment',
+          studentId: sid,
+          studentName: s.name || 'Unnamed student',
+          oldDate: first.date,
+          newDate: s.enrolled,
+          installments: s.installments
+        });
+      }
+    }
+
+    // 2) The matching income / cash flow entry created at enrollment time.
+    //    Tries, in order: exact studentId match → desc starts with the
+    //    standard "Student enrollment fee: <name>" text → desc just
+    //    contains the student's name (catches older/renamed formats).
+    let candidates = feeTx.filter(t => !usedTxIds.has(String(t.firebaseId || t.id)) && t.studentId && String(t.studentId) === String(sid));
+    if (candidates.length === 0 && nameLower) {
+      candidates = feeTx.filter(t =>
+        !usedTxIds.has(String(t.firebaseId || t.id)) &&
+        (!t.studentId || String(t.studentId).trim() === '') &&
+        typeof t.desc === 'string' &&
+        t.desc.toLowerCase().indexOf('enrollment fee') !== -1 &&
+        t.desc.toLowerCase().indexOf(nameLower) !== -1
+      );
+    }
+    if (candidates.length > 0) {
+      // Use the earliest-dated match as "the" enrollment-fee entry
+      candidates.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      const tx = candidates[0];
+      usedTxIds.add(String(tx.firebaseId || tx.id));
+      if (tx.date && tx.date !== s.enrolled) {
+        issues.push({
+          type: 'transaction',
+          txId: tx.firebaseId || tx.id,
+          studentId: sid,
+          studentName: s.name || 'Unnamed student',
+          oldDate: tx.date,
+          newDate: s.enrolled
+        });
+      }
+    }
+  });
+
+  return issues;
+}
+
+async function renderDataRepairPage() {
+  const container = document.getElementById('data-repair-content');
+  if (!container) return;
+
+  if (!currentSchoolId) {
+    container.innerHTML = '<div class="page-header"><div><h2>🛠 Fix Enrollment Dates</h2></div></div>' +
+      '<div class="card"><div style="text-align:center;padding:40px;color:var(--text2);">Please select a school first.</div></div>';
+    return;
+  }
+
+  container.innerHTML =
+    '<div class="page-header"><div><h2>🛠 Fix Enrollment Dates</h2>' +
+    '<p>Corrects existing installment / income records that were saved with the entry date instead of the student\'s Enrolled date</p></div></div>' +
+    '<div class="card"><div style="text-align:center;padding:40px;color:var(--text2);">🔍 Scanning all students and cash flow entries…</div></div>';
+
+  let issues = [];
+  try {
+    issues = await scanEnrollmentDateIssues();
+  } catch (err) {
+    console.error('Enrollment date scan failed:', err);
+    container.innerHTML = '<div class="page-header"><div><h2>🛠 Fix Enrollment Dates</h2></div></div>' +
+      '<div class="card"><div style="text-align:center;padding:40px;color:var(--danger);">Error scanning data: ' + (err.message || 'Please try again.') + '</div></div>';
+    return;
+  }
+  window.__dataRepairIssues = issues;
+
+  if (issues.length === 0) {
+    container.innerHTML =
+      '<div class="page-header"><div><h2>🛠 Fix Enrollment Dates</h2>' +
+      '<p>Corrects existing installment / income records that were saved with the entry date instead of the student\'s Enrolled date</p></div></div>' +
+      '<div class="card"><div style="text-align:center;padding:40px;color:var(--text2);">✓ No mismatches found. Every initial-payment installment and income entry already matches its student\'s enrolled date.' +
+      '<br><br><span style="font-size:12px;">If you can still see a mismatch on the Cash Flow page, use the ✏ Edit button on that entry to fix it directly — it doesn\'t depend on this scan.</span></div></div>';
+    return;
+  }
+
+  const rows = issues.map((iss, idx) =>
+    '<tr>' +
+      '<td><input type="checkbox" class="repair-check" data-idx="' + idx + '" checked></td>' +
+      '<td>' + (iss.studentName) + '</td>' +
+      '<td>' + (iss.type === 'installment' ? 'Installment record' : 'Income (Cash Flow) entry') + '</td>' +
+      '<td style="color:var(--danger);">' + iss.oldDate + '</td>' +
+      '<td style="color:var(--success);font-weight:600;">→ ' + iss.newDate + '</td>' +
+    '</tr>'
+  ).join('');
+
+  container.innerHTML =
+    '<div class="page-header"><div><h2>🛠 Fix Enrollment Dates</h2>' +
+    '<p>Corrects existing installment / income records that were saved with the entry date instead of the student\'s Enrolled date</p></div></div>' +
+    '<div class="card">' +
+      '<div class="card-title">Found ' + issues.length + ' record(s) with a mismatched date' +
+        '<span><button class="btn btn-outline btn-sm" onclick="toggleAllRepairChecks(true)">Select All</button> ' +
+        '<button class="btn btn-outline btn-sm" onclick="toggleAllRepairChecks(false)">Select None</button></span>' +
+      '</div>' +
+      '<div style="overflow-x:auto;max-height:480px;overflow-y:auto;">' +
+        '<table class="data-table"><thead><tr><th></th><th>Student</th><th>Record Type</th><th>Currently Saved Date</th><th>Will Change To</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>' +
+      '</div>' +
+      '<div style="margin-top:18px;display:flex;gap:10px;">' +
+        '<button class="btn btn-accent" onclick="applyDataRepairFixes()">✓ Fix All ' + issues.length + ' Selected Record(s) Now</button>' +
+      '</div>' +
+      '<div id="data-repair-result" style="margin-top:14px;"></div>' +
+    '</div>';
+}
+
+function toggleAllRepairChecks(state) {
+  document.querySelectorAll('.repair-check').forEach(cb => { cb.checked = state; });
+}
+
+async function applyDataRepairFixes() {
+  const issues = window.__dataRepairIssues || [];
+  const selectedIdx = Array.from(document.querySelectorAll('.repair-check:checked')).map(cb => parseInt(cb.dataset.idx, 10));
+  if (selectedIdx.length === 0) { alert('Select at least one record to fix.'); return; }
+  if (!confirm('This will permanently update ' + selectedIdx.length + ' record(s) in your saved data to match each student\'s enrolled date. Continue?')) return;
+
+  const resultEl = document.getElementById('data-repair-result');
+  if (resultEl) resultEl.innerHTML = 'Applying fixes for ' + selectedIdx.length + ' record(s)…';
+
+  const selected = selectedIdx.map(i => issues[i]).filter(Boolean);
+  let fixed = 0, failed = 0;
+  const chunkSize = 450; // stay under Firestore's 500-write batch limit
+
+  for (let i = 0; i < selected.length; i += chunkSize) {
+    const chunk = selected.slice(i, i + chunkSize);
+    const batch = db.batch();
+    let writesInBatch = 0;
+
+    chunk.forEach(iss => {
+      try {
+        if (iss.type === 'installment') {
+          const installments = Array.isArray(iss.installments) ? iss.installments.slice() : [];
+          if (installments.length === 0) { failed++; return; }
+          installments[0] = { ...installments[0], date: iss.newDate };
+          const studentRef = db.collection('schools').doc(currentSchoolId).collection('students').doc(iss.studentId);
+          batch.update(studentRef, { installments });
+          writesInBatch++;
+
+          const sLocal = (data.students || []).find(x => (x.firebaseId || x.id) === iss.studentId);
+          if (sLocal && Array.isArray(sLocal.installments) && sLocal.installments.length > 0) {
+            sLocal.installments[0].date = iss.newDate;
+          }
+        } else if (iss.type === 'transaction') {
+          const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(iss.txId);
+          batch.update(txRef, { date: iss.newDate });
+          writesInBatch++;
+
+          const tLocal = (data.transactions || []).find(x => (x.firebaseId || x.id) === iss.txId);
+          if (tLocal) tLocal.date = iss.newDate;
+        }
+      } catch (err) {
+        console.error('Could not queue fix:', err);
+        failed++;
+      }
+    });
+
+    if (writesInBatch > 0) {
+      try {
+        await batch.commit();
+        fixed += writesInBatch;
+      } catch (err) {
+        console.error('Batch commit failed:', err);
+        failed += writesInBatch;
+      }
+    }
+
+    if (resultEl) resultEl.innerHTML = 'Applying fixes… ' + Math.min(i + chunkSize, selected.length) + ' / ' + selected.length;
+  }
+
+  try { FGCache.invalidate(currentSchoolId, 'students'); FGCache.invalidate(currentSchoolId, 'transactions'); } catch (_e) {}
+  try { EnhancedCache.del(currentSchoolId, 'students').catch(e => {}); EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {}); } catch (_e) {}
+
+  if (resultEl) {
+    resultEl.innerHTML = '<div class="alert alert-success">✓ Fixed ' + fixed + ' record(s)' + (failed ? ', ' + failed + ' failed — check console.' : '.') + '</div>';
+  }
+  addNotification('Data repair: fixed ' + fixed + ' enrollment date record(s)', 'success');
+  renderDataRepairPage();
+  if (currentPage === 'cashflow') renderCashflow();
+  if (currentPage === 'dashboard') renderDashboard();
 }
 
 async function viewStudent(id) {
@@ -9339,6 +9593,37 @@ function openStudentDetailModal(s) {
         </tr>`).join('')
     : '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text2);">No installments recorded yet</td></tr>';
 
+  // Detect a mismatch between this student's enrolled date and either
+  // their first ("Initial payment") installment or the matching Student Fee
+  // cashflow transaction — same check as the bulk Cash Flow page scan, but
+  // scoped to just this one student.
+  const sid = s.firebaseId || s.id;
+  let mismatchNotice = '';
+  if (s.enrolled && sid) {
+    const hasInstallmentMismatch = installments.length > 0 &&
+      installments[0] && installments[0].note === 'Initial payment' &&
+      installments[0].date && installments[0].date !== s.enrolled;
+
+    const nameLower = (s.name || '').trim().toLowerCase();
+    const matchedTx = (data.transactions || []).find(t =>
+      t.category === 'Student Fee' &&
+      (String(t.studentId) === String(sid) ||
+        (!t.studentId && typeof t.desc === 'string' &&
+          t.desc.toLowerCase().indexOf('enrollment fee') !== -1 &&
+          t.desc.toLowerCase().indexOf(nameLower) !== -1))
+    );
+    const hasTxMismatch = matchedTx && matchedTx.date && matchedTx.date !== s.enrolled;
+
+    if (hasInstallmentMismatch || hasTxMismatch) {
+      const safeSid = String(sid).replace(/'/g, "\\'");
+      mismatchNotice = `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div style="font-size:12px;color:#92400e;">⚠ This student enrolled on <strong>${s.enrolled}</strong>, but the initial payment ${hasInstallmentMismatch && hasTxMismatch ? 'and income entry are' : hasInstallmentMismatch ? 'is' : 'income entry is'} dated differently.</div>
+        <button class="btn btn-accent btn-sm" onclick="fixStudentEnrollmentDateMismatch('${safeSid}')">📅 Fix Date Mismatch</button>
+      </div>`;
+    }
+  }
+
   const modal = document.createElement('div');
   modal.id = 'modal-student-detail';
   modal.className = 'modal-overlay open';
@@ -9348,6 +9633,8 @@ function openStudentDetailModal(s) {
       <h3>👤 ${s.name}</h3>
       <button class="modal-close" onclick="document.getElementById('modal-student-detail').remove()">✕</button>
     </div>
+
+    ${mismatchNotice}
 
     <!-- Basic Info -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">
@@ -9452,7 +9739,7 @@ function openStudentDetailModal(s) {
     <div id="add-inst-form-${s.id}" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px;margin-bottom:16px;">
       <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:12px;">Add New Installment</div>
       <div class="form-grid">
-        <div class="form-group"><label>Date *</label><input type="date" id="inst-date-${s.id}" value="${new Date().toISOString().split('T')[0]}"></div>
+        <div class="form-group"><label>Date *</label><input type="date" id="inst-date-${s.id}" value="${s.enrolled || new Date().toISOString().split('T')[0]}"></div>
         <div class="form-group"><label>Amount (₹) *</label><input type="number" id="inst-amount-${s.id}" placeholder="Enter amount" max="${balance}"></div>
         <div class="form-group"><label>Payment Mode</label>
           <select id="inst-mode-${s.id}"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
@@ -9921,9 +10208,32 @@ async function renderCashflow() {
         const amt = t.amount || 0;
         const txId = String(t.id || t.firebaseId || '');
         const safeTxId = txId.replace(/'/g, "\\'");
-        const actionCell = currentRole === 'owner'
-          ? '<button class="btn btn-danger btn-sm" onclick="confirmDeleteTransaction(\'' + safeTxId + '\')">Delete</button>'
-          : '';
+
+        // Detect a Student Fee entry whose date doesn't match the student's
+        // enrolled date (e.g. enrolled in May but entered into the system in
+        // June, so the income landed in June's cash flow instead of May's).
+        let mismatchBtn = '';
+        if (t.category === 'Student Fee' && t.studentId && t.date) {
+          const matchedStudent = (data.students || []).find(s => String(s.firebaseId || s.id) === String(t.studentId));
+          if (matchedStudent && matchedStudent.enrolled && matchedStudent.enrolled !== t.date) {
+            const safeEnrolled = matchedStudent.enrolled.replace(/'/g, "\\'");
+            mismatchBtn =
+              '<button class="btn btn-outline btn-sm" style="margin-right:6px;border-color:var(--warning);color:var(--warning);" ' +
+              'title="This student enrolled on ' + matchedStudent.enrolled + ' but this entry is dated ' + t.date + '. Click to move it to the enrollment date." ' +
+              'onclick="moveTransactionToEnrolledDate(\'' + safeTxId + '\', \'' + safeEnrolled + '\')">' +
+              '📅 Move to ' + matchedStudent.enrolled +
+              '</button>';
+          }
+        }
+
+        const actionCell =
+          mismatchBtn +
+          (currentRole === 'owner' || currentRole === 'office'
+            ? '<button class="btn btn-outline btn-sm" style="margin-right:6px;" onclick="openEditTransactionModal(\'' + safeTxId + '\')">✏ Edit</button>'
+            : '') +
+          (currentRole === 'owner'
+            ? '<button class="btn btn-danger btn-sm" onclick="confirmDeleteTransaction(\'' + safeTxId + '\')">Delete</button>'
+            : '');
         return '<tr>' +
           '<td style="color:var(--text2);font-size:12px;">' + (t.date||'—') + '</td>' +
           '<td><span class="badge badge-gray">' + (t.category||'Other') + '</span></td>' +
@@ -9932,13 +10242,240 @@ async function renderCashflow() {
           '<td style="font-weight:600;color:' + (t.type==='income'?'var(--success)':'var(--danger)') + '">' +
             (t.type==='income'?'+':'-') + '&#x20B9;' + amt.toLocaleString() +
           '</td>' +
-          '<td>' + actionCell + '</td>' +
+          '<td style="white-space:nowrap;">' + actionCell + '</td>' +
         '</tr>';
       }).join('');
     }
   }
   } catch (error) {
     console.error('Error rendering cashflow:', error);
+  }
+}
+
+function openEditTransactionModal(id) {
+  const tx = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===String(id); });
+  if (!tx) { showToast('Transaction not found'); return; }
+  const old = document.getElementById('modal-edit-transaction');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-edit-transaction';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML =
+    '<div class="modal" style="width:440px;max-width:96vw;">' +
+      '<div class="modal-header">' +
+        '<h3>✏ Edit Entry Date</h3>' +
+        '<button class="modal-close" onclick="document.getElementById(\'modal-edit-transaction\').remove()">✕</button>' +
+      '</div>' +
+      '<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
+        '<div style="font-weight:600;font-size:14px;margin-bottom:2px;">' + (tx.category||'Transaction') + ' · ' +
+          '<span style="color:' + (tx.type==='income'?'var(--success)':'var(--danger)') + ';">₹' + (tx.amount||0).toLocaleString() + '</span></div>' +
+        '<div style="font-size:12px;color:var(--text2);">' + (tx.desc||'No description') + '</div>' +
+      '</div>' +
+      '<div class="form-group"><label>Date</label><input type="date" id="edit-tx-date" value="' + (tx.date||'') + '"></div>' +
+      '<div style="display:flex;gap:10px;margin-top:18px;">' +
+        '<button class="btn btn-accent" data-tx-id="' + String(id).replace(/"/g, '&quot;') + '" onclick="saveTransactionDateEdit(this.dataset.txId)" style="flex:1;">✓ Save</button>' +
+        '<button class="btn btn-outline" onclick="document.getElementById(\'modal-edit-transaction\').remove()" style="flex:1;">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  modal.addEventListener('click', function(e){ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function saveTransactionDateEdit(id) {
+  const txId = String(id);
+  const newDate = document.getElementById('edit-tx-date')?.value;
+  if (!newDate) { alert('Please choose a date.'); return; }
+  try {
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      await db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId).update({ date: newDate });
+      FGCache.invalidate(currentSchoolId, 'transactions');
+      EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+    }
+    const t = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===txId; });
+    if (t) t.date = newDate;
+    document.getElementById('modal-edit-transaction')?.remove();
+    renderCashflow();
+    showToast('✓ Entry date updated');
+  } catch(e) {
+    console.error('Edit transaction date error:', e);
+    alert('Error updating date: ' + (e.message||'Please try again.'));
+  }
+}
+
+// One-click fix for the "enrolled in May, entered in June" case: re-dates a
+// Student Fee cash flow entry to match its student's enrolled date, so the
+// income moves into the correct month instead of staying on the data-entry date.
+async function moveTransactionToEnrolledDate(id, enrolledDate) {
+  const txId = String(id);
+  if (!enrolledDate) { showToast('No enrollment date found for this student'); return; }
+  if (!confirm('Move this income entry to ' + enrolledDate + ' (the student\'s enrollment date)?')) return;
+  try {
+    if (typeof db !== 'undefined' && currentSchoolId) {
+      await db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId).update({ date: enrolledDate });
+      FGCache.invalidate(currentSchoolId, 'transactions');
+      EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+    }
+    const t = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===txId; });
+    if (t) t.date = enrolledDate;
+    renderCashflow();
+    showToast('✓ Moved to ' + enrolledDate);
+  } catch(e) {
+    console.error('Move transaction to enrolled date error:', e);
+    alert('Error moving entry: ' + (e.message||'Please try again.'));
+  }
+}
+
+// Bulk version of the same fix, triggered from the Cash Flow page header.
+// Scans ALL Student Fee transactions for this school (not just the currently
+// filtered month — a June-dated entry that needs to move to May wouldn't show
+// up under a May filter anyway), finds every one whose date doesn't match its
+// student's enrolled date, and moves them all in a single batched write.
+async function fixAllEnrollmentDateMismatches() {
+  if (!currentSchoolId) { showToast('Please select a school first'); return; }
+  const btn = document.getElementById('cf-fix-mismatches-btn');
+  const originalLabel = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '🔍 Scanning…'; }
+
+  try {
+    const issues = (await scanEnrollmentDateIssues()).filter(iss => iss.type === 'transaction');
+
+    if (issues.length === 0) {
+      showToast('✓ No mismatches found — every income entry matches its student\'s enrolled date');
+      return;
+    }
+
+    const preview = issues.slice(0, 8)
+      .map(iss => '• ' + iss.studentName + ': ' + iss.oldDate + ' → ' + iss.newDate)
+      .join('\n');
+    const more = issues.length > 8 ? '\n…and ' + (issues.length - 8) + ' more' : '';
+    const confirmed = confirm(
+      'Found ' + issues.length + ' income entr' + (issues.length === 1 ? 'y' : 'ies') +
+      ' dated differently from the student\'s enrollment date:\n\n' + preview + more +
+      '\n\nMove all of them to their student\'s enrolled date now?'
+    );
+    if (!confirmed) return;
+
+    if (btn) btn.innerHTML = '⏳ Fixing…';
+
+    let fixed = 0, failed = 0;
+    const chunkSize = 450; // stay under Firestore's 500-write batch limit
+
+    for (let i = 0; i < issues.length; i += chunkSize) {
+      const chunk = issues.slice(i, i + chunkSize);
+      const batch = db.batch();
+      let writesInBatch = 0;
+
+      chunk.forEach(iss => {
+        try {
+          const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(iss.txId);
+          batch.update(txRef, { date: iss.newDate });
+          writesInBatch++;
+        } catch (err) {
+          console.error('Could not queue transaction fix:', err);
+          failed++;
+        }
+      });
+
+      if (writesInBatch > 0) {
+        try {
+          await batch.commit();
+          chunk.forEach(iss => {
+            const tLocal = (data.transactions || []).find(x => String(x.firebaseId || x.id) === String(iss.txId));
+            if (tLocal) tLocal.date = iss.newDate;
+          });
+          fixed += writesInBatch;
+        } catch (err) {
+          console.error('Batch commit failed:', err);
+          failed += writesInBatch;
+        }
+      }
+    }
+
+    try { FGCache.invalidate(currentSchoolId, 'transactions'); } catch (_e) {}
+    try { EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {}); } catch (_e) {}
+
+    renderCashflow();
+    showToast('✓ Fixed ' + fixed + ' entr' + (fixed === 1 ? 'y' : 'ies') + (failed ? ', ' + failed + ' failed — check console.' : ''));
+  } catch (err) {
+    console.error('fixAllEnrollmentDateMismatches error:', err);
+    alert('Error scanning/fixing entries: ' + (err.message || 'Please try again.'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
+  }
+}
+
+// Per-student version of the same fix, shown inside the Student Detail modal.
+// Fixes BOTH the student's first ("Initial payment") installment record and
+// the matching Student Fee cashflow transaction in one click, so this one
+// student's enrollment-date mismatch is fully resolved without needing the
+// bulk Cash Flow scan.
+async function fixStudentEnrollmentDateMismatch(studentId) {
+  const sid = String(studentId);
+  const s = (data.students || []).find(x => String(x.firebaseId || x.id) === sid);
+  if (!s || !s.enrolled) { showToast('Student or enrollment date not found'); return; }
+  if (!currentSchoolId || typeof db === 'undefined') { showToast('Not connected to a school'); return; }
+
+  const installments = Array.isArray(s.installments) ? s.installments : [];
+  const hasInstallmentMismatch = installments.length > 0 &&
+    installments[0] && installments[0].note === 'Initial payment' &&
+    installments[0].date && installments[0].date !== s.enrolled;
+
+  const nameLower = (s.name || '').trim().toLowerCase();
+  const matchedTx = (data.transactions || []).find(t =>
+    t.category === 'Student Fee' &&
+    (String(t.studentId) === sid ||
+      (!t.studentId && typeof t.desc === 'string' &&
+        t.desc.toLowerCase().indexOf('enrollment fee') !== -1 &&
+        t.desc.toLowerCase().indexOf(nameLower) !== -1))
+  );
+  const hasTxMismatch = matchedTx && matchedTx.date && matchedTx.date !== s.enrolled;
+
+  if (!hasInstallmentMismatch && !hasTxMismatch) {
+    showToast('✓ No mismatch found — already up to date');
+    return;
+  }
+
+  const parts = [];
+  if (hasInstallmentMismatch) parts.push('installment record (' + installments[0].date + ' → ' + s.enrolled + ')');
+  if (hasTxMismatch) parts.push('cash flow income entry (' + matchedTx.date + ' → ' + s.enrolled + ')');
+  if (!confirm('Move the following to ' + s.name + '\'s enrolled date (' + s.enrolled + ')?\n\n• ' + parts.join('\n• '))) return;
+
+  try {
+    const batch = db.batch();
+    let writes = 0;
+
+    if (hasInstallmentMismatch) {
+      const updatedInstallments = installments.slice();
+      updatedInstallments[0] = { ...updatedInstallments[0], date: s.enrolled };
+      const studentRef = db.collection('schools').doc(currentSchoolId).collection('students').doc(sid);
+      batch.update(studentRef, { installments: updatedInstallments });
+      writes++;
+      s.installments = updatedInstallments;
+    }
+
+    if (hasTxMismatch) {
+      const txId = String(matchedTx.firebaseId || matchedTx.id);
+      const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId);
+      batch.update(txRef, { date: s.enrolled });
+      writes++;
+      matchedTx.date = s.enrolled;
+    }
+
+    if (writes > 0) await batch.commit();
+
+    FGCache.invalidate(currentSchoolId, 'students');
+    FGCache.invalidate(currentSchoolId, 'transactions');
+    EnhancedCache.del(currentSchoolId, 'students').catch(e => {});
+    EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+
+    showToast('✓ Fixed ' + s.name + '\'s date mismatch');
+
+    // Reopen the modal so the mismatch notice and updated dates reflect immediately
+    document.getElementById('modal-student-detail')?.remove();
+    openStudentDetailModal(s);
+  } catch (err) {
+    console.error('fixStudentEnrollmentDateMismatch error:', err);
+    alert('Error fixing mismatch: ' + (err.message || 'Please try again.'));
   }
 }
 
@@ -14445,7 +14982,10 @@ function renderOtherServices() {
   page.innerHTML =
     '<div class="page-header">' +
       '<div><h2>\ud83d\udd27 Other Services</h2><p>Non-student service clients and payments</p></div>' +
-      '<button class="btn btn-accent" onclick="openAddOtherServiceModal()">+ Add Service</button>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="btn btn-outline" id="os-fix-mismatches-btn" style="border-color:var(--warning);color:var(--warning);" onclick="fixAllServiceDateMismatches()" title="Scans all Other Service Fee entries and moves any that don\'t match the service date">📅 Fix Date Mismatches</button>' +
+        '<button class="btn btn-accent" onclick="openAddOtherServiceModal()">+ Add Service</button>' +
+      '</div>' +
     '</div>' +
     '<div class="stats-grid">' +
       '<div class="stat-card accent"><div class="sc-label">Total Clients</div><div class="sc-value" style="color:var(--primary)">' + services.length + '</div><div class="sc-sub">Service clients</div></div>' +
@@ -16021,6 +16561,21 @@ function viewOtherService(id) {
   const svc = (data.otherServices||[]).find(s=>s.id===id||s.firebaseId===id);
   if (!svc) { showToast('Service not found'); return; }
   const bal = (svc.totalAmount||0)-(svc.amountPaid||0);
+
+  // Detect a mismatch between this service's own date and either its first
+  // ("Initial payment") installment or the matching "Other Service Fee"
+  // cashflow transaction — uses the same detection helper as the bulk scan.
+  const osIssue = _findServiceDateIssue(svc);
+  let osMismatchNotice = '';
+  if (osIssue) {
+    const safeSvcId = String(osIssue.svcId).replace(/'/g, "\\'");
+    osMismatchNotice = `
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div style="font-size:12px;color:#92400e;">⚠ This service is dated <strong>${svc.date}</strong>, but the initial payment ${osIssue.hasInstallmentMismatch && osIssue.hasTxMismatch ? 'and income entry are' : osIssue.hasInstallmentMismatch ? 'is' : 'income entry is'} dated differently.</div>
+      <button class="btn btn-accent btn-sm" onclick="fixServiceDateMismatch('${safeSvcId}')">📅 Fix Date Mismatch</button>
+    </div>`;
+  }
+
   const old = document.getElementById('modal-view-other-service');
   if (old) old.remove();
   const modal = document.createElement('div');
@@ -16032,6 +16587,7 @@ function viewOtherService(id) {
       <h3>🔧 ${svc.clientName}</h3>
       <button class="modal-close" onclick="document.getElementById('modal-view-other-service').remove()">✕</button>
     </div>
+    ${osMismatchNotice}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
       <div style="background:var(--surface2);border-radius:10px;padding:14px 16px;">
         <div style="font-size:11px;color:var(--text2);margin-bottom:8px;">CLIENT INFO</div>
@@ -16138,6 +16694,182 @@ async function saveServiceInstallment(id) {
     viewOtherService(id);
     renderOtherServices();
   } catch(e) { alert('Error: ' + e.message); }
+}
+
+// Scans a single Other Service record for a date mismatch between svc.date
+// and either its first ("Initial payment") installment or the matching
+// "Other Service Fee" cashflow transaction. Returns null if no mismatch.
+function _findServiceDateIssue(svc) {
+  if (!svc || !svc.date) return null;
+  const svcId = svc.firebaseId || svc.id;
+  if (!svcId) return null;
+
+  const svcInstallments = Array.isArray(svc.installments) ? svc.installments : [];
+  const hasInstallmentMismatch = svcInstallments.length > 0 &&
+    svcInstallments[0] && svcInstallments[0].note === 'Initial payment' &&
+    svcInstallments[0].date && svcInstallments[0].date !== svc.date;
+
+  const clientNameLower = (svc.clientName || '').trim().toLowerCase();
+  const matchedTx = (data.transactions || []).find(t =>
+    t.category === 'Other Service Fee' &&
+    typeof t.desc === 'string' &&
+    t.desc.toLowerCase().indexOf('service:') !== -1 &&
+    t.desc.toLowerCase().indexOf(clientNameLower) !== -1
+  );
+  const hasTxMismatch = !!(matchedTx && matchedTx.date && matchedTx.date !== svc.date);
+
+  if (!hasInstallmentMismatch && !hasTxMismatch) return null;
+  return { svc, svcId, hasInstallmentMismatch, matchedTx, hasTxMismatch };
+}
+
+// Per-service version, shown inside the Other Service detail modal. Fixes
+// BOTH the service's first installment record and its matching cashflow
+// transaction in one click — mirrors fixStudentEnrollmentDateMismatch.
+async function fixServiceDateMismatch(serviceId) {
+  const sid = String(serviceId);
+  const svc = (data.otherServices || []).find(x => String(x.firebaseId || x.id) === sid);
+  if (!svc) { showToast('Service not found'); return; }
+  if (!currentSchoolId || typeof db === 'undefined') { showToast('Not connected to a school'); return; }
+
+  const issue = _findServiceDateIssue(svc);
+  if (!issue) { showToast('✓ No mismatch found — already up to date'); return; }
+
+  const parts = [];
+  if (issue.hasInstallmentMismatch) parts.push('installment record (' + svc.installments[0].date + ' → ' + svc.date + ')');
+  if (issue.hasTxMismatch) parts.push('cash flow income entry (' + issue.matchedTx.date + ' → ' + svc.date + ')');
+  if (!confirm('Move the following to ' + svc.clientName + '\'s service date (' + svc.date + ')?\n\n• ' + parts.join('\n• '))) return;
+
+  try {
+    const batch = db.batch();
+    let writes = 0;
+
+    if (issue.hasInstallmentMismatch) {
+      const updatedInstallments = svc.installments.slice();
+      updatedInstallments[0] = { ...updatedInstallments[0], date: svc.date };
+      const svcRef = db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(sid);
+      batch.update(svcRef, { installments: updatedInstallments });
+      writes++;
+      svc.installments = updatedInstallments;
+    }
+
+    if (issue.hasTxMismatch) {
+      const txId = String(issue.matchedTx.firebaseId || issue.matchedTx.id);
+      const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId);
+      batch.update(txRef, { date: svc.date });
+      writes++;
+      issue.matchedTx.date = svc.date;
+    }
+
+    if (writes > 0) await batch.commit();
+
+    FGCache.invalidate(currentSchoolId, 'otherServices');
+    FGCache.invalidate(currentSchoolId, 'transactions');
+    EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {});
+    EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+
+    showToast('✓ Fixed ' + svc.clientName + '\'s date mismatch');
+
+    document.getElementById('modal-view-other-service')?.remove();
+    viewOtherService(sid);
+    renderOtherServices();
+  } catch (err) {
+    console.error('fixServiceDateMismatch error:', err);
+    alert('Error fixing mismatch: ' + (err.message || 'Please try again.'));
+  }
+}
+
+// Bulk version, triggered from the Other Services page header. Scans every
+// service for this school, finds every installment/transaction date mismatch,
+// and fixes them all in a single batched write — mirrors fixAllEnrollmentDateMismatches.
+async function fixAllServiceDateMismatches() {
+  if (!currentSchoolId) { showToast('Please select a school first'); return; }
+  const btn = document.getElementById('os-fix-mismatches-btn');
+  const originalLabel = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '🔍 Scanning…'; }
+
+  try {
+    const services = (data.otherServices || []).filter(s => !currentSchoolId || s.schoolId === currentSchoolId);
+    const issues = services.map(_findServiceDateIssue).filter(Boolean);
+
+    if (issues.length === 0) {
+      showToast('✓ No mismatches found — every service entry matches its service date');
+      return;
+    }
+
+    const preview = issues.slice(0, 8)
+      .map(iss => {
+        const bits = [];
+        if (iss.hasInstallmentMismatch) bits.push('installment');
+        if (iss.hasTxMismatch) bits.push('income entry');
+        return '• ' + iss.svc.clientName + ': ' + bits.join(' + ') + ' → ' + iss.svc.date;
+      })
+      .join('\n');
+    const more = issues.length > 8 ? '\n…and ' + (issues.length - 8) + ' more' : '';
+    const confirmed = confirm(
+      'Found ' + issues.length + ' service' + (issues.length === 1 ? '' : 's') +
+      ' with a date mismatch:\n\n' + preview + more +
+      '\n\nMove all of them to their service date now?'
+    );
+    if (!confirmed) return;
+
+    if (btn) btn.innerHTML = '⏳ Fixing…';
+
+    let fixed = 0, failed = 0;
+    const chunkSize = 200; // each issue can produce up to 2 writes; stay well under the 500-write batch limit
+
+    for (let i = 0; i < issues.length; i += chunkSize) {
+      const chunk = issues.slice(i, i + chunkSize);
+      const batch = db.batch();
+      let writesInBatch = 0;
+
+      chunk.forEach(iss => {
+        try {
+          if (iss.hasInstallmentMismatch) {
+            const updatedInstallments = iss.svc.installments.slice();
+            updatedInstallments[0] = { ...updatedInstallments[0], date: iss.svc.date };
+            const svcRef = db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(String(iss.svcId));
+            batch.update(svcRef, { installments: updatedInstallments });
+            writesInBatch++;
+            iss._pendingInstallments = updatedInstallments;
+          }
+          if (iss.hasTxMismatch) {
+            const txId = String(iss.matchedTx.firebaseId || iss.matchedTx.id);
+            const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId);
+            batch.update(txRef, { date: iss.svc.date });
+            writesInBatch++;
+          }
+        } catch (err) {
+          console.error('Could not queue service fix:', err);
+          failed++;
+        }
+      });
+
+      if (writesInBatch > 0) {
+        try {
+          await batch.commit();
+          chunk.forEach(iss => {
+            if (iss._pendingInstallments) iss.svc.installments = iss._pendingInstallments;
+            if (iss.hasTxMismatch) iss.matchedTx.date = iss.svc.date;
+          });
+          fixed += writesInBatch;
+        } catch (err) {
+          console.error('Batch commit failed:', err);
+          failed += writesInBatch;
+        }
+      }
+    }
+
+    try { FGCache.invalidate(currentSchoolId, 'otherServices'); FGCache.invalidate(currentSchoolId, 'transactions'); } catch (_e) {}
+    try { EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {}); EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {}); } catch (_e) {}
+
+    renderOtherServices();
+    showToast('✓ Fixed ' + fixed + ' record' + (fixed === 1 ? '' : 's') + (failed ? ', ' + failed + ' failed — check console.' : ''));
+  } catch (err) {
+    console.error('fixAllServiceDateMismatches error:', err);
+    alert('Error scanning/fixing services: ' + (err.message || 'Please try again.'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
+  }
 }
 
 function generateServiceInvoice(id) {
