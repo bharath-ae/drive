@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "online.firstgear.app",
+      "sha256_cert_fingerprints": [
+        "51:8A:9C:FB:C3:41:1A:F2:64:86:ED:63:EA:54:CC:86:C3:86:0E:F4:9E:FE:A7:FF:35:66:7C:34:D5:11:CD:9C"
+      ]
+    }
+  }
+]
