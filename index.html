@@ -868,10 +868,7 @@
       <div class="page" id="page-cashflow">
         <div class="page-header">
           <div><h2>Daily Cash Flow</h2><p>Income & expenditure management</p></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-outline" id="cf-fix-mismatches-btn" style="border-color:var(--warning);color:var(--warning);" onclick="fixAllEnrollmentDateMismatches()" title="Scans all Student Fee entries and moves any that don't match the student's enrolled date">📅 Fix Date Mismatches</button>
-            <button class="btn btn-accent" data-action="add_transaction" onclick="openModal('modal-add-tx')">+ Add Entry</button>
-          </div>
+          <button class="btn btn-accent" data-action="add_transaction" onclick="openModal('modal-add-tx')">+ Add Entry</button>
         </div>
         <div class="cf-summary" id="cf-summary"></div>
         <div class="card">
@@ -1910,6 +1907,7 @@
       <div class="form-group full"><label>Description</label><input type="text" id="tx-desc" placeholder="Details of the transaction"></div>
     </div>
     <div style="margin-top:20px;display:flex;gap:10px;">
+      <button class="btn btn-outline" onclick="forceSyncStudentPaymentsToCashflow()">Sync Student Payments</button>
       <button class="btn btn-accent" data-permission="add_transaction" onclick="addTransaction()">Add Entry</button>
       <button class="btn btn-outline" onclick="closeModal('modal-add-tx')">Cancel</button>
     </div>
@@ -3324,12 +3322,13 @@ async function addDriverFuelEntry() {
 
     // Also add as expense transaction
     if (cost > 0 && currentSchoolId) {
-      await FirebaseService.addTransaction({
+      await recordCashflowTransaction({
         date,
         type: 'expense',
         category: 'Petrol',
         desc: `Fuel – ${vehicle} by ${fuelEntry.instructorName}`,
-        amount: cost
+        amount: cost,
+        schoolId: currentSchoolId
       });
     }
 
@@ -4741,26 +4740,16 @@ const DataWriter = {
   },
 
   async executeWrite(operation, collection, docId, data) {
-    // Build a proper Firestore reference that supports nested paths like
-    // 'schools/{schoolId}/students'. db.collection(path) and db.doc(path)
-    // both accept full slash-delimited paths natively, so we no longer
-    // naively split on '/' and grab parts[0]/parts[1] (which broke for
-    // any collection path with more than 2 segments).
-    if (operation === 'add') {
-      return await db.collection(collection).add(data);
-    }
-
-    if (!docId) {
-      throw new Error(`DataWriter.executeWrite: docId is required for "${operation}" on ${collection}`);
-    }
-    const docPath = `${collection}/${docId}`;
+    const path = docId ? `${collection}/${docId}` : collection;
 
     if (operation === 'set') {
-      return await db.doc(docPath).set(data, { merge: true });
+      return await db.doc(path).set(data, { merge: true });
     } else if (operation === 'update') {
-      return await db.doc(docPath).update(data);
+      return await db.doc(path).update(data);
+    } else if (operation === 'add') {
+      return await db.collection(collection).add(data);
     } else if (operation === 'delete') {
-      return await db.doc(docPath).delete();
+      return await db.doc(path).delete();
     }
   }
 };
@@ -7188,8 +7177,9 @@ async function renderOverallDashboard() {
   const perSchool = userSchools.map((school, i) => {
     const snap = snapshots[i];
     const students = snap.students.length;
-    const revenue  = snap.transactions.filter(t=>t.type==='income'&&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
-    const expenses = snap.transactions.filter(t=>t.type==='expense'&&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
+    const mappedTx = getSchoolTransactionsWithMappedInstallments(snap.transactions, { schoolId: school.id, students: snap.students, otherServices: snap.otherServices || [] });
+    const revenue  = mappedTx.filter(t=>t.type==='income'&&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
+    const expenses = mappedTx.filter(t=>t.type==='expense'&&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
     const instructors = snap.staff.filter(st=>st.role==='instructor').length;
     totalStudents += students; totalRevenue += revenue; totalExpenses += expenses; totalInstructors += instructors;
     return { school, students, revenue, expenses, instructors };
@@ -7322,7 +7312,7 @@ async function renderOverallCashflow() {
 
   let allTransactions = [];
   const perSchool = userSchools.map((school, i) => {
-    const txs = snapshots[i].transactions;
+    const txs = getSchoolTransactionsWithMappedInstallments(snapshots[i].transactions, { schoolId: school.id, students: snapshots[i].students, otherServices: snapshots[i].otherServices || [] });
     txs.forEach(t => allTransactions.push({ ...t, schoolName: school.name }));
     const income  = txs.filter(t=>t.type==='income' &&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
     const expense = txs.filter(t=>t.type==='expense'&&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
@@ -7399,7 +7389,7 @@ async function renderOverallReports() {
 
   const perSchool = userSchools.map((school, i) => {
     const students = snapshots[i].students;
-    const txs      = snapshots[i].transactions;
+    const txs      = getSchoolTransactionsWithMappedInstallments(snapshots[i].transactions, { schoolId: school.id, students: students, otherServices: snapshots[i].otherServices || [] });
     const instructors = snapshots[i].staff.filter(st=>st.role==='instructor').length;
     const revenue  = txs.filter(t=>t.type==='income' &&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
     const expenses = txs.filter(t=>t.type==='expense'&&(t.date||'').startsWith(thisMonth)).reduce((s,t)=>s+(t.amount||0),0);
@@ -9220,11 +9210,15 @@ async function addStudentFromModal() {
         amount: amountPaid,
         paymentMode: paymentMode,
         studentId: studentRef && studentRef.id ? studentRef.id : '',
+        studentName: name,
+        source: 'student_installment',
+        sourceKey: _fgPaymentSourceKey(studentRef && studentRef.id ? studentRef.id : (studentData.firebaseId || studentData.id || ''), 0),
+        installmentIndex: 0,
         schoolId: currentSchoolId ? currentSchoolId : '',
         ...FirebaseService.getOwnerScope()
       };
       
-      await FirebaseService.addTransaction(transactionData);
+      await recordCashflowTransaction(transactionData);
       addNotification(`Student enrolled and payment recorded: ₹${amountPaid}`,'success');
     } else {
       addNotification(`New student enrolled: ${name}`,'success');
@@ -9289,8 +9283,24 @@ async function enrollStudent() {
     if (studentData.fcmToken && studentData.email) {
       await saveUserFcmToken(studentData.email, studentData.fcmToken);
     }
+    if (paidAmt > 0 && currentSchoolId) {
+      await recordCashflowTransaction({
+        date: studentData.enrolled,
+        type: 'income',
+        category: 'Student Fee',
+        desc: `Student enrollment fee: ${name}`,
+        amount: paidAmt,
+        paymentMode: 'Cash',
+        studentId: studentData.firebaseId || studentData.id || '',
+        studentName: name,
+        source: 'student_installment',
+        sourceKey: _fgPaymentSourceKey(studentData.firebaseId || studentData.id || '', 0),
+        installmentIndex: 0,
+        schoolId: currentSchoolId
+      });
+    }
     document.getElementById('enroll-msg').innerHTML = `<div class="alert alert-success">✓ ${name} enrolled successfully! Instructor: ${document.getElementById('s-instructor').value}</div>`;
-    addNotification(`Student enrolled: ${name}`,'success');
+    addNotification(paidAmt > 0 ? `Student enrolled and payment recorded: ₹${paidAmt}` : `Student enrolled: ${name}`,'success');
     clearEnrollForm();
   } catch (error) {
     console.error('Error enrolling student:', error);
@@ -9593,37 +9603,6 @@ function openStudentDetailModal(s) {
         </tr>`).join('')
     : '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text2);">No installments recorded yet</td></tr>';
 
-  // Detect a mismatch between this student's enrolled date and either
-  // their first ("Initial payment") installment or the matching Student Fee
-  // cashflow transaction — same check as the bulk Cash Flow page scan, but
-  // scoped to just this one student.
-  const sid = s.firebaseId || s.id;
-  let mismatchNotice = '';
-  if (s.enrolled && sid) {
-    const hasInstallmentMismatch = installments.length > 0 &&
-      installments[0] && installments[0].note === 'Initial payment' &&
-      installments[0].date && installments[0].date !== s.enrolled;
-
-    const nameLower = (s.name || '').trim().toLowerCase();
-    const matchedTx = (data.transactions || []).find(t =>
-      t.category === 'Student Fee' &&
-      (String(t.studentId) === String(sid) ||
-        (!t.studentId && typeof t.desc === 'string' &&
-          t.desc.toLowerCase().indexOf('enrollment fee') !== -1 &&
-          t.desc.toLowerCase().indexOf(nameLower) !== -1))
-    );
-    const hasTxMismatch = matchedTx && matchedTx.date && matchedTx.date !== s.enrolled;
-
-    if (hasInstallmentMismatch || hasTxMismatch) {
-      const safeSid = String(sid).replace(/'/g, "\\'");
-      mismatchNotice = `
-      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin-bottom:18px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-        <div style="font-size:12px;color:#92400e;">⚠ This student enrolled on <strong>${s.enrolled}</strong>, but the initial payment ${hasInstallmentMismatch && hasTxMismatch ? 'and income entry are' : hasInstallmentMismatch ? 'is' : 'income entry is'} dated differently.</div>
-        <button class="btn btn-accent btn-sm" onclick="fixStudentEnrollmentDateMismatch('${safeSid}')">📅 Fix Date Mismatch</button>
-      </div>`;
-    }
-  }
-
   const modal = document.createElement('div');
   modal.id = 'modal-student-detail';
   modal.className = 'modal-overlay open';
@@ -9633,8 +9612,6 @@ function openStudentDetailModal(s) {
       <h3>👤 ${s.name}</h3>
       <button class="modal-close" onclick="document.getElementById('modal-student-detail').remove()">✕</button>
     </div>
-
-    ${mismatchNotice}
 
     <!-- Basic Info -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">
@@ -9739,7 +9716,7 @@ function openStudentDetailModal(s) {
     <div id="add-inst-form-${s.id}" style="display:none;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:16px;margin-bottom:16px;">
       <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:12px;">Add New Installment</div>
       <div class="form-grid">
-        <div class="form-group"><label>Date *</label><input type="date" id="inst-date-${s.id}" value="${s.enrolled || new Date().toISOString().split('T')[0]}"></div>
+        <div class="form-group"><label>Date *</label><input type="date" id="inst-date-${s.id}" value="${new Date().toISOString().split('T')[0]}"></div>
         <div class="form-group"><label>Amount (₹) *</label><input type="number" id="inst-amount-${s.id}" placeholder="Enter amount" max="${balance}"></div>
         <div class="form-group"><label>Payment Mode</label>
           <select id="inst-mode-${s.id}"><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option></select>
@@ -10049,21 +10026,38 @@ async function loadStudentAttendanceStats(firebaseId) {
   return;
 }
 
+function _getStudentInstallmentDomId(studentId, studentObj) {
+  const ids = [];
+  if (studentId !== undefined && studentId !== null && studentId !== '') ids.push(String(studentId));
+  if (studentObj) {
+    if (studentObj.id !== undefined && studentObj.id !== null) ids.push(String(studentObj.id));
+    if (studentObj.firebaseId !== undefined && studentObj.firebaseId !== null) ids.push(String(studentObj.firebaseId));
+  }
+  const sd = window.__studentDetailModalData || {};
+  if (sd.id !== undefined && sd.id !== null) ids.push(String(sd.id));
+  if (sd.firebaseId !== undefined && sd.firebaseId !== null) ids.push(String(sd.firebaseId));
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  return unique.find(id => document.getElementById('add-inst-form-' + id) || document.getElementById('inst-date-' + id)) || unique[0] || '';
+}
+
 function openAddInstallmentForm(studentId) {
-  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.firebaseId || _sd.id || ''; }
-  const form = document.getElementById('add-inst-form-' + studentId);
+  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.id || _sd.firebaseId || ''; }
+  const s = (data.students || []).find(x => String(x.id || '') === String(studentId) || String(x.firebaseId || '') === String(studentId)) || window.__studentDetailModalData || null;
+  const domId = _getStudentInstallmentDomId(studentId, s);
+  const form = document.getElementById('add-inst-form-' + domId);
   if (form) form.style.display = 'block';
 }
 
 async function saveInstallment(studentId) {
-  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.firebaseId || _sd.id || ''; }
-  const s = data.students.find(x => x.id == studentId || x.id === studentId);
+  if (studentId === undefined) { const _sd = window.__studentDetailModalData || {}; studentId = _sd.id || _sd.firebaseId || ''; }
+  const s = data.students.find(x => String(x.id || '') === String(studentId) || String(x.firebaseId || '') === String(studentId));
   if (!s) return;
 
-  const date = document.getElementById('inst-date-' + studentId)?.value;
-  const amount = parseFloat(document.getElementById('inst-amount-' + studentId)?.value || '0');
-  const mode = document.getElementById('inst-mode-' + studentId)?.value || 'Cash';
-  const note = document.getElementById('inst-note-' + studentId)?.value || '';
+  const domId = _getStudentInstallmentDomId(studentId, s);
+  const date = document.getElementById('inst-date-' + domId)?.value;
+  const amount = parseFloat(document.getElementById('inst-amount-' + domId)?.value || '0');
+  const mode = document.getElementById('inst-mode-' + domId)?.value || 'Cash';
+  const note = document.getElementById('inst-note-' + domId)?.value || '';
 
   if (!date || amount <= 0) { alert('Please enter date and valid amount'); return; }
 
@@ -10078,7 +10072,7 @@ async function saveInstallment(studentId) {
   s.installments.push({ date, amount, mode, note });
   s.paid = currentPaid + amount;
 
-  const firebaseDocId = s.firebaseId || (typeof studentId === 'string' && studentId.length > 10 ? studentId : null);
+  const firebaseDocId = s.firebaseId || (typeof s.id === 'string' && s.id.length > 10 ? s.id : (typeof studentId === 'string' && studentId.length > 10 ? studentId : null));
   try {
     // Save to Firebase
     if (currentSchoolId && firebaseDocId) {
@@ -10092,7 +10086,7 @@ async function saveInstallment(studentId) {
 
     // Add to cashflow — scoped to this school
     if (currentSchoolId) {
-      await FirebaseService.addTransaction({
+      await recordCashflowTransaction({
         date,
         type: 'income',
         category: 'Student Fee',
@@ -10100,6 +10094,10 @@ async function saveInstallment(studentId) {
         amount,
         paymentMode: mode,
         studentId: firebaseDocId || studentId,
+        studentName: s.name || '',
+        source: 'student_installment',
+        sourceKey: _fgPaymentSourceKey(firebaseDocId || studentId, s.installments.length - 1),
+        installmentIndex: s.installments.length - 1,
         schoolId: currentSchoolId
       });
     }
@@ -10155,6 +10153,505 @@ function toggleService(element, serviceName, fee) {
 // ============================================================
 // CASHFLOW
 // ============================================================
+
+// Centralized cashflow helpers -------------------------------------------------
+// IMPORTANT: student installments are the source of truth for Student Fee income.
+// These helpers normalize installment dates/amounts from the student record,
+// match them with existing cashflow rows, prevent duplicate counting, and make
+// Cash Flow + Reports show the same values as the student entry.
+window.__fgFinanceSyncState = window.__fgFinanceSyncState || {};
+
+function _fgNormalizeAmount(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return isNaN(value) ? 0 : value;
+  if (typeof value === 'object') {
+    if (typeof value.amount !== 'undefined') return _fgNormalizeAmount(value.amount);
+    if (typeof value.value !== 'undefined') return _fgNormalizeAmount(value.value);
+  }
+  const cleaned = String(value).replace(/[,₹\s]/g, '').replace(/[^0-9.\-]/g, '');
+  const n = parseFloat(cleaned || '0');
+  return isNaN(n) ? 0 : n;
+}
+
+function _fgDateToISO(value, fallback) {
+  if (!value && fallback) return _fgDateToISO(fallback, '');
+  if (!value) return '';
+  try {
+    // Firestore Timestamp
+    if (typeof value.toDate === 'function') return value.toDate().toISOString().slice(0, 10);
+    if (typeof value.seconds === 'number') return new Date(value.seconds * 1000).toISOString().slice(0, 10);
+    if (value instanceof Date) return isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
+  } catch(e) {}
+
+  let v = String(value).trim();
+  if (!v) return fallback ? _fgDateToISO(fallback, '') : '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0, 10);
+
+  // DD/MM/YYYY, DD-MM-YYYY or DD.MM.YYYY (common in imported student entries)
+  let m = v.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+
+  // Excel serial date
+  if (/^\d{5}$/.test(v)) {
+    const d = new Date(Math.round((parseInt(v, 10) - 25569) * 86400000));
+    if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  }
+
+  const parsed = new Date(v);
+  if (!isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  return fallback ? _fgDateToISO(fallback, '') : v.slice(0, 10);
+}
+
+function _fgCleanText(v) { return String(v || '').trim().toLowerCase(); }
+function _fgStableStudentId(st) { return String(st.firebaseId || st.id || st.studentId || '').trim(); }
+function _fgPaymentSourceKey(studentId, idx) { return 'student:' + studentId + ':installment:' + idx; }
+function _fgLegacyPaymentSourceKey(studentId, idx, date, amount) { return _fgPaymentSourceKey(studentId, idx) + ':' + (date || '') + ':' + _fgNormalizeAmount(amount); }
+function _fgTxKey(t, idx) { return String(t && (t.firebaseId || t.id || t._fgRowKey) || ('row-' + idx)); }
+
+function _fgGetStudentInstallments(st) {
+  if (Array.isArray(st.installments)) return st.installments.slice();
+  // Defensive support for older imports/custom code that used a different key.
+  if (Array.isArray(st.payments)) return st.payments.slice();
+  if (Array.isArray(st.paymentHistory)) return st.paymentHistory.slice();
+  if (Array.isArray(st.feePayments)) return st.feePayments.slice();
+  return [];
+}
+
+function _fgInstallmentAmount(inst) {
+  return _fgNormalizeAmount(inst && (inst.amount ?? inst.paid ?? inst.payment ?? inst.value ?? inst.amt));
+}
+
+function _fgInstallmentDate(inst, st) {
+  return _fgDateToISO(inst && (inst.date || inst.paymentDate || inst.paidDate || inst.createdAt), st && (st.enrolled || st.createdAt));
+}
+
+function _fgInstallmentMode(inst, st) {
+  return (inst && (inst.mode || inst.paymentMode || inst.payMode || inst.method)) || (st && st.paymentMode) || 'Cash';
+}
+
+function buildStudentPaymentRows(students, options) {
+  options = options || {};
+  const schoolId = options.schoolId || currentSchoolId || '';
+  const rows = [];
+
+  (students || []).forEach(st => {
+    if (schoolId && st.schoolId && st.schoolId !== schoolId) return;
+    const studentId = _fgStableStudentId(st);
+    if (!studentId) return;
+
+    const studentName = st.name || st.fullName || st.studentName || 'Student';
+    let installments = _fgGetStudentInstallments(st);
+
+    // Legacy records may have only total paid and no installment array. Still show
+    // that paid amount as the initial student-fee income.
+    if (installments.length === 0 && _fgNormalizeAmount(st.paid) > 0) {
+      installments = [{
+        date: _fgDateToISO(st.enrolled || st.createdAt, new Date()),
+        amount: _fgNormalizeAmount(st.paid),
+        mode: st.paymentMode || 'Cash',
+        note: 'Initial payment'
+      }];
+    }
+
+    // If student.paid is greater than the saved installment total, preserve the
+    // difference as a legacy payment so reports do not silently drop it.
+    const instSum = installments.reduce((sum, inst) => sum + _fgInstallmentAmount(inst), 0);
+    const paid = _fgNormalizeAmount(st.paid);
+    if (paid > 0 && paid > instSum + 0.009) {
+      installments.push({
+        date: _fgDateToISO(st.enrolled || st.createdAt, new Date()),
+        amount: paid - instSum,
+        mode: st.paymentMode || 'Cash',
+        note: 'Legacy paid amount'
+      });
+    }
+
+    installments.forEach((inst, idx) => {
+      const amount = _fgInstallmentAmount(inst);
+      if (amount <= 0) return;
+      const date = _fgInstallmentDate(inst, st) || _fgDateToISO(new Date());
+      const mode = _fgInstallmentMode(inst, st);
+      const note = (inst && (inst.note || inst.notes || inst.remark || inst.description)) || (idx === 0 ? 'Initial payment' : 'Installment');
+      const sourceKey = _fgPaymentSourceKey(studentId, idx);
+      rows.push({
+        studentId,
+        studentName,
+        installmentIndex: idx,
+        date,
+        amount,
+        mode,
+        note,
+        sourceKey,
+        legacySourceKey: _fgLegacyPaymentSourceKey(studentId, idx, date, amount),
+        isInitial: idx === 0 || _fgCleanText(note).includes('initial') || _fgCleanText(note).includes('enrollment')
+      });
+    });
+  });
+
+  return rows;
+}
+
+function _fgSourceKeyMatches(payment, txSourceKey) {
+  const sk = String(txSourceKey || '');
+  if (!sk) return false;
+  return sk === payment.sourceKey || sk === payment.legacySourceKey || sk.indexOf(payment.sourceKey + ':') === 0;
+}
+
+function _fgStudentPaymentCandidateScore(payment, tx, allowLoose) {
+  if (!tx || tx.type !== 'income' || (tx.category || '') !== 'Student Fee') return 9999;
+
+  const txSourceKey = tx.sourceKey || tx.paymentSourceKey || '';
+  if (_fgSourceKeyMatches(payment, txSourceKey)) return 0;
+
+  const txStudentId = String(tx.studentId || tx.student || '').trim();
+  const sameStudent = txStudentId && txStudentId === String(payment.studentId || '');
+  const txIndexRaw = tx.installmentIndex ?? tx.instalmentIndex ?? tx.paymentIndex;
+  const sameIndex = txIndexRaw !== undefined && txIndexRaw !== null && String(txIndexRaw) === String(payment.installmentIndex);
+  if (sameStudent && sameIndex) return 1;
+
+  const txDate = _fgDateToISO(tx.date || tx.paymentDate || tx.createdAt, '');
+  const txAmount = _fgNormalizeAmount(tx.amount);
+  const sameDateAmount = txDate === payment.date && Math.abs(txAmount - payment.amount) < 0.01;
+  const desc = _fgCleanText(tx.desc || tx.description || tx.note || tx.details || tx.narration || tx.particulars || '');
+  const name = _fgCleanText(payment.studentName);
+  const descHasName = !!(name && desc.includes(name));
+
+  if (sameStudent && sameDateAmount) return 2;
+  if (descHasName && sameDateAmount) return 3;
+
+  // Old rows sometimes missed the studentId/source metadata and sometimes used
+  // the entry date instead of the installment date. Use loose matching only
+  // after stronger checks, so we can repair those rows instead of creating
+  // duplicate income entries.
+  if (allowLoose) {
+    const sameAmount = Math.abs(txAmount - payment.amount) < 0.01;
+    const initialWords = desc.includes('initial') || desc.includes('enrollment') || desc.includes('enrolment');
+    const installmentWords = desc.includes('installment') || desc.includes('instalment') || desc.includes('payment') || desc.includes('fee');
+    if (sameStudent && sameAmount && (payment.isInitial ? initialWords || installmentWords : installmentWords)) return 4;
+    if (descHasName && sameAmount && (payment.isInitial ? initialWords || installmentWords : installmentWords)) return 5;
+  }
+
+  return 9999;
+}
+
+function _fgFindMatchingStudentFeeTx(payment, transactions, usedKeys) {
+  let best = null;
+  let bestScore = 9999;
+
+  (transactions || []).forEach((tx, idx) => {
+    const key = _fgTxKey(tx, idx);
+    if (usedKeys && usedKeys.has(key)) return;
+    const score = _fgStudentPaymentCandidateScore(payment, tx, true);
+    if (score < bestScore) {
+      bestScore = score;
+      best = tx;
+    }
+  });
+
+  return bestScore < 9999 ? best : null;
+}
+
+function _fgPaymentToTransaction(payment, existing, schoolId) {
+  const desc = payment.isInitial
+    ? 'Student enrollment fee: ' + payment.studentName + ' (' + payment.mode + ')'
+    : 'Installment from ' + payment.studentName + ' (' + payment.mode + ')';
+
+  return {
+    ...(existing || {}),
+    id: existing ? (existing.id || existing.firebaseId || existing._fgRowKey) : ('student-payment-' + payment.sourceKey.replace(/[^a-zA-Z0-9_-]/g, '-')),
+    firebaseId: existing ? (existing.firebaseId || existing.id || '') : '',
+    date: payment.date,
+    type: 'income',
+    category: 'Student Fee',
+    desc: (existing && (existing.desc || existing.description)) || desc,
+    amount: payment.amount,
+    paymentMode: payment.mode,
+    studentId: payment.studentId,
+    studentName: payment.studentName,
+    source: 'student_installment',
+    sourceKey: payment.sourceKey,
+    legacySourceKey: payment.legacySourceKey,
+    installmentIndex: payment.installmentIndex,
+    schoolId: schoolId || currentSchoolId || (existing && existing.schoolId) || '',
+    _studentPaymentAuthoritative: true
+  };
+}
+
+function _fgTxMatchesInstallment(t, ownerId, ownerName, date, amount, category) {
+  if (!t || t.type !== 'income' || (t.category || '') !== category) return false;
+  if (_fgDateToISO(t.date || t.paymentDate || t.createdAt, '') !== _fgDateToISO(date, '')) return false;
+  if (Math.abs(_fgNormalizeAmount(t.amount) - _fgNormalizeAmount(amount)) >= 0.01) return false;
+  const txOwnerId = String(t.studentId || t.serviceId || t.otherServiceId || '');
+  const targetId = String(ownerId || '');
+  if (targetId && txOwnerId && txOwnerId === targetId) return true;
+  const desc = _fgCleanText(t.desc || t.description || '');
+  const nm = _fgCleanText(ownerName || '');
+  if (nm && desc.includes(nm)) return true;
+  if (!txOwnerId && !targetId) return true;
+  return false;
+}
+
+function getSchoolTransactionsWithMappedInstallments(baseTransactions, options) {
+  options = options || {};
+  const schoolId = options.schoolId || currentSchoolId || '';
+  const raw = Array.isArray(baseTransactions) ? baseTransactions : (data.transactions || []);
+  const students = options.students || data.students || [];
+  const otherServices = options.otherServices || data.otherServices || [];
+
+  const txs = raw
+    .filter(t => !schoolId || !t.schoolId || t.schoolId === schoolId)
+    .map((t, idx) => ({
+      ...t,
+      _fgRowKey: _fgTxKey(t, idx),
+      date: _fgDateToISO(t.date || t.paymentDate || t.createdAt, ''),
+      amount: _fgNormalizeAmount(t.amount),
+      schoolId: t.schoolId || schoolId
+    }));
+
+  const payments = buildStudentPaymentRows(students, { schoolId });
+  const used = new Set();
+  const mappedStudentTx = payments.map(payment => {
+    const matched = _fgFindMatchingStudentFeeTx(payment, txs, used);
+    if (matched) used.add(matched._fgRowKey || _fgTxKey(matched));
+    const row = _fgPaymentToTransaction(payment, matched, schoolId);
+    if (!matched) row._mappedFromInstallment = true;
+    return row;
+  });
+
+  // Student Fee rows that are represented by a student installment are excluded
+  // from the raw list to avoid double-counting. Extra duplicate legacy rows that
+  // match an installment are also hidden in reports/cashflow.
+  const remainingTx = txs.filter(t => {
+    if ((t.category || '') !== 'Student Fee') return true;
+    if (used.has(t._fgRowKey)) return false;
+    const covered = payments.some(p => _fgStudentPaymentCandidateScore(p, t, true) < 9999);
+    return !covered;
+  });
+
+  // Other-service installments -> Other Service Fee income rows
+  const serviceMapped = [];
+  (otherServices || [])
+    .filter(svc => !schoolId || !svc.schoolId || svc.schoolId === schoolId)
+    .forEach(svc => {
+      const svcId = String(svc.firebaseId || svc.id || '');
+      const clientName = svc.clientName || svc.name || 'Client';
+      (svc.installments || []).forEach((inst, idx) => {
+        const date = _fgDateToISO(inst.date || inst.paymentDate || svc.date || svc.createdAt, '');
+        const amount = _fgNormalizeAmount(inst.amount);
+        if (!date || amount <= 0) return;
+        const exists = remainingTx.concat(serviceMapped).some(t => _fgTxMatchesInstallment(t, svcId, clientName, date, amount, 'Other Service Fee'));
+        if (!exists) {
+          const mode = inst.mode || inst.paymentMode || svc.paymentMode || 'Cash';
+          serviceMapped.push({
+            id: 'mapped-service-inst-' + (svcId || clientName.replace(/\s+/g, '-')) + '-' + idx,
+            firebaseId: '',
+            _mappedFromInstallment: true,
+            _mappedType: 'service',
+            installmentIndex: idx,
+            date,
+            type: 'income',
+            category: 'Other Service Fee',
+            desc: (idx === 0 && _fgCleanText(inst.note).includes('initial') ? 'Service: ' : 'Payment: ') + clientName + (svc.serviceType ? ' — ' + svc.serviceType : '') + ' (' + mode + ')',
+            amount,
+            paymentMode: mode,
+            serviceId: svcId,
+            otherServiceId: svcId,
+            clientName,
+            schoolId
+          });
+        }
+      });
+    });
+
+  return remainingTx.concat(mappedStudentTx, serviceMapped)
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+async function recordCashflowTransaction(transactionData, options) {
+  options = options || {};
+  const schoolId = transactionData.schoolId || currentSchoolId || '';
+  const txData = {
+    ...transactionData,
+    date: _fgDateToISO(transactionData.date || new Date(), new Date()),
+    amount: _fgNormalizeAmount(transactionData.amount),
+    schoolId,
+    ...FirebaseService.getOwnerScope(schoolId)
+  };
+
+  let saved = null;
+  if (schoolId && typeof FirebaseService !== 'undefined') {
+    saved = await FirebaseService.addTransaction(txData);
+  }
+
+  const localTx = {
+    ...txData,
+    ...(saved || {}),
+    id: (saved && saved.id) || txData.id || ('local-tx-' + Date.now()),
+    firebaseId: (saved && saved.id) || txData.firebaseId || txData.id || ''
+  };
+
+  if (!data.transactions) data.transactions = [];
+  const localId = String(localTx.id || localTx.firebaseId || '');
+  const already = localId && data.transactions.some(t => String(t.id || t.firebaseId || '') === localId);
+  if (!already) data.transactions.unshift(localTx);
+  data._transactionsLoaded = true;
+
+  if (schoolId) {
+    try { FGCache.invalidate(schoolId, 'transactions'); } catch(e) {}
+    try { EnhancedCache.del(schoolId, 'transactions').catch(e => {}); } catch(e) {}
+  }
+
+  if (options.refresh !== false) {
+    try { if (document.getElementById('page-cashflow')?.classList.contains('active')) renderCashflow(); } catch(e) {}
+    try { if (document.getElementById('page-reports')?.classList.contains('active')) renderReport(); } catch(e) {}
+  }
+  return localTx;
+}
+
+async function fetchFreshFinanceDataFromFirestore() {
+  if (!currentSchoolId || typeof db === 'undefined') return;
+  try {
+    const schoolRef = db.collection('schools').doc(currentSchoolId);
+    const [studentsSnap, txSnap] = await Promise.all([
+      schoolRef.collection('students').get(),
+      schoolRef.collection('transactions').get()
+    ]);
+    const freshStudents = studentsSnap.docs.map(d => ({ firebaseId: d.id, id: d.id, schoolId: currentSchoolId, ...d.data() }));
+    const freshTx = txSnap.docs.map(d => ({ firebaseId: d.id, id: d.id, schoolId: currentSchoolId, ...d.data() }));
+    const otherStudents = (data.students || []).filter(st => st.schoolId && st.schoolId !== currentSchoolId);
+    const otherTx = (data.transactions || []).filter(t => t.schoolId && t.schoolId !== currentSchoolId);
+    data.students = otherStudents.concat(freshStudents);
+    data.transactions = otherTx.concat(freshTx);
+    data._transactionsLoaded = true;
+  } catch (e) {
+    console.warn('Fresh finance fetch failed; using loaded data:', e.message || e);
+  }
+}
+
+async function ensureStudentPaymentsSynced(reason) {
+  if (!currentSchoolId || typeof db === 'undefined') return { created:0, updated:0, matched:0 };
+
+  const now = Date.now();
+  const key = currentSchoolId + ':finance';
+  const state = window.__fgFinanceSyncState[key] || {};
+  if (!window.__fgForceFinanceSync && state.done && now - state.done < 60000) return state.result || { created:0, updated:0, matched:0 };
+  if (state.running && state.promise) return state.promise;
+
+  const promise = (async () => {
+    await fetchFreshFinanceDataFromFirestore();
+
+    const schoolRef = db.collection('schools').doc(currentSchoolId);
+    const transactions = (data.transactions || [])
+      .filter(t => !t.schoolId || t.schoolId === currentSchoolId)
+      .map((t, idx) => ({
+        ...t,
+        _fgRowKey: _fgTxKey(t, idx),
+        date: _fgDateToISO(t.date || t.paymentDate || t.createdAt, ''),
+        amount: _fgNormalizeAmount(t.amount),
+        schoolId: t.schoolId || currentSchoolId
+      }));
+
+    const payments = buildStudentPaymentRows(data.students || [], { schoolId: currentSchoolId });
+    const used = new Set();
+    let created = 0, updated = 0, matched = 0;
+    let batch = db.batch();
+    let batchWrites = 0;
+    const localCreated = [];
+
+    async function commitBatchIfNeeded(force) {
+      if (batchWrites === 0) return;
+      if (!force && batchWrites < 430) return;
+      await batch.commit();
+      batch = db.batch();
+      batchWrites = 0;
+    }
+
+    for (const payment of payments) {
+      const match = _fgFindMatchingStudentFeeTx(payment, transactions, used);
+      const txData = _fgPaymentToTransaction(payment, match, currentSchoolId);
+
+      if (match) {
+        matched++;
+        const txId = String(match.firebaseId || match.id || '');
+        used.add(match._fgRowKey || txId);
+
+        const patch = {};
+        if (_fgDateToISO(match.date, '') !== payment.date) patch.date = payment.date;
+        if (Math.abs(_fgNormalizeAmount(match.amount) - payment.amount) >= 0.01) patch.amount = payment.amount;
+        if (match.type !== 'income') patch.type = 'income';
+        if ((match.category || '') !== 'Student Fee') patch.category = 'Student Fee';
+        if (!match.studentId || String(match.studentId) !== payment.studentId) patch.studentId = payment.studentId;
+        if (!match.studentName || String(match.studentName) !== payment.studentName) patch.studentName = payment.studentName;
+        if ((match.paymentMode || '') !== payment.mode) patch.paymentMode = payment.mode;
+        if ((match.source || '') !== 'student_installment') patch.source = 'student_installment';
+        if ((match.sourceKey || '') !== payment.sourceKey) patch.sourceKey = payment.sourceKey;
+        if (String(match.installmentIndex ?? '') !== String(payment.installmentIndex)) patch.installmentIndex = payment.installmentIndex;
+        if ((match.schoolId || currentSchoolId) !== currentSchoolId) patch.schoolId = currentSchoolId;
+        patch.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+
+        if (Object.keys(patch).length > 1 && txId && !txId.startsWith('student-payment-')) {
+          batch.set(schoolRef.collection('transactions').doc(txId), patch, { merge: true });
+          batchWrites++; updated++;
+          await commitBatchIfNeeded(false);
+        }
+
+        const local = (data.transactions || []).find(t => String(t.firebaseId || t.id || '') === txId);
+        if (local) Object.assign(local, { ...patch, updatedAt: new Date().toISOString() });
+      } else {
+        const docRef = schoolRef.collection('transactions').doc();
+        const createData = {
+          ...txData,
+          schoolId: currentSchoolId,
+          ...FirebaseService.getOwnerScope(currentSchoolId),
+          createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+        };
+        delete createData.id;
+        delete createData.firebaseId;
+        delete createData._mappedFromInstallment;
+        delete createData._studentPaymentAuthoritative;
+        delete createData._fgRowKey;
+        batch.set(docRef, createData);
+        batchWrites++; created++;
+        localCreated.push({ ...createData, id: docRef.id, firebaseId: docRef.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await commitBatchIfNeeded(false);
+      }
+    }
+
+    await commitBatchIfNeeded(true);
+    if (created || updated) {
+      if (!data.transactions) data.transactions = [];
+      data.transactions = data.transactions.concat(localCreated);
+      try { FGCache.invalidate(currentSchoolId, 'transactions'); } catch(e) {}
+      try { EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {}); } catch(e) {}
+    }
+
+    window.__fgForceFinanceSync = false;
+    const result = { created, updated, matched };
+    window.__fgFinanceSyncState[key] = { done: Date.now(), result };
+    if (created || updated) console.log('[Finance Sync] student installment payments reconciled with cashflow:', result);
+    return result;
+  })().catch(e => {
+    console.warn('Student payment cashflow sync failed. Reports will still use mapped student installments:', e.message || e);
+    return { created:0, updated:0, matched:0, error: e.message || String(e) };
+  });
+
+  window.__fgFinanceSyncState[key] = { running: true, promise };
+  const result = await promise;
+  window.__fgFinanceSyncState[key] = { done: Date.now(), result };
+  return result;
+}
+
+async function forceSyncStudentPaymentsToCashflow() {
+  if (!currentSchoolId) { alert('Please select a school first.'); return; }
+  if (!confirm('This will scan all students and make cashflow/report totals match every saved student installment. Continue?')) return;
+  window.__fgForceFinanceSync = true;
+  const res = await ensureStudentPaymentsSynced('manual');
+  alert('Finance sync completed. Created: ' + (res.created||0) + ', updated: ' + (res.updated||0) + ', matched: ' + (res.matched||0));
+  try { await renderCashflow(); } catch(e) {}
+  try { await renderReport(); } catch(e) {}
+}
+
 async function renderCashflow() {
   try {
     // Check if school is selected
@@ -10167,19 +10664,23 @@ async function renderCashflow() {
       return;
     }
     
+    await ensureStudentPaymentsSynced('cashflow');
     const monthFilter = document.getElementById('cf-month-filter')?.value || new Date().toISOString().slice(0,7);
     let transactions;
     
     // Use in-memory data (populated by realtime listener) and filter client-side.
     // Only fall back to a Firestore query if data.transactions hasn't been loaded yet.
-    const inMemory = (data.transactions || []).filter(t => !currentSchoolId || t.schoolId === currentSchoolId);
-    if (inMemory.length > 0 || data._transactionsLoaded) {
+    const rawInMemory = (data.transactions || []).filter(t => !currentSchoolId || !t.schoolId || t.schoolId === currentSchoolId);
+    if (rawInMemory.length > 0 || data._transactionsLoaded) {
+      const mappedInMemory = getSchoolTransactionsWithMappedInstallments(rawInMemory);
       transactions = monthFilter
-        ? inMemory.filter(t => t.date && t.date.startsWith(monthFilter))
-        : inMemory;
+        ? mappedInMemory.filter(t => t.date && t.date.startsWith(monthFilter))
+        : mappedInMemory;
     } else {
       // First render before listener has fired — fetch once and cache
-      transactions = await FirebaseService.getTransactions(monthFilter);
+      const fetched = await FirebaseService.getTransactions(monthFilter);
+      transactions = getSchoolTransactionsWithMappedInstallments(fetched);
+      if (monthFilter) transactions = transactions.filter(t => t.date && t.date.startsWith(monthFilter));
     }
     
     // Apply role-based filtering
@@ -10208,32 +10709,13 @@ async function renderCashflow() {
         const amt = t.amount || 0;
         const txId = String(t.id || t.firebaseId || '');
         const safeTxId = txId.replace(/'/g, "\\'");
-
-        // Detect a Student Fee entry whose date doesn't match the student's
-        // enrolled date (e.g. enrolled in May but entered into the system in
-        // June, so the income landed in June's cash flow instead of May's).
-        let mismatchBtn = '';
-        if (t.category === 'Student Fee' && t.studentId && t.date) {
-          const matchedStudent = (data.students || []).find(s => String(s.firebaseId || s.id) === String(t.studentId));
-          if (matchedStudent && matchedStudent.enrolled && matchedStudent.enrolled !== t.date) {
-            const safeEnrolled = matchedStudent.enrolled.replace(/'/g, "\\'");
-            mismatchBtn =
-              '<button class="btn btn-outline btn-sm" style="margin-right:6px;border-color:var(--warning);color:var(--warning);" ' +
-              'title="This student enrolled on ' + matchedStudent.enrolled + ' but this entry is dated ' + t.date + '. Click to move it to the enrollment date." ' +
-              'onclick="moveTransactionToEnrolledDate(\'' + safeTxId + '\', \'' + safeEnrolled + '\')">' +
-              '📅 Move to ' + matchedStudent.enrolled +
-              '</button>';
-          }
-        }
-
-        const actionCell =
-          mismatchBtn +
-          (currentRole === 'owner' || currentRole === 'office'
+        const actionCell = (t._mappedFromInstallment ? '<span class="badge badge-amber" title="This row is mapped from the saved installment because no cashflow document was found.">Auto-mapped</span> ' : '') +
+          ((currentRole === 'owner' || currentRole === 'office'
             ? '<button class="btn btn-outline btn-sm" style="margin-right:6px;" onclick="openEditTransactionModal(\'' + safeTxId + '\')">✏ Edit</button>'
             : '') +
-          (currentRole === 'owner'
+          (currentRole === 'owner' && !t._mappedFromInstallment
             ? '<button class="btn btn-danger btn-sm" onclick="confirmDeleteTransaction(\'' + safeTxId + '\')">Delete</button>'
-            : '');
+            : ''));
         return '<tr>' +
           '<td style="color:var(--text2);font-size:12px;">' + (t.date||'—') + '</td>' +
           '<td><span class="badge badge-gray">' + (t.category||'Other') + '</span></td>' +
@@ -10242,7 +10724,7 @@ async function renderCashflow() {
           '<td style="font-weight:600;color:' + (t.type==='income'?'var(--success)':'var(--danger)') + '">' +
             (t.type==='income'?'+':'-') + '&#x20B9;' + amt.toLocaleString() +
           '</td>' +
-          '<td style="white-space:nowrap;">' + actionCell + '</td>' +
+          '<td>' + actionCell + '</td>' +
         '</tr>';
       }).join('');
     }
@@ -10253,8 +10735,12 @@ async function renderCashflow() {
 }
 
 function openEditTransactionModal(id) {
-  const tx = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===String(id); });
-  if (!tx) { showToast('Transaction not found'); return; }
+  let tx = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===String(id); });
+  if (!tx) {
+    const allMapped = getSchoolTransactionsWithMappedInstallments(data.transactions || []);
+    tx = allMapped.find(function(x){ return String(x.id||x.firebaseId)===String(id); });
+  }
+  if (!tx) { showToast('Transaction not found. Auto-mapped installment rows can be edited from the student/service installment only.'); return; }
   const old = document.getElementById('modal-edit-transaction');
   if (old) old.remove();
   const modal = document.createElement('div');
@@ -10286,196 +10772,62 @@ async function saveTransactionDateEdit(id) {
   const newDate = document.getElementById('edit-tx-date')?.value;
   if (!newDate) { alert('Please choose a date.'); return; }
   try {
-    if (typeof db !== 'undefined' && currentSchoolId) {
-      await db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId).update({ date: newDate });
-      FGCache.invalidate(currentSchoolId, 'transactions');
-      EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+    let t = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===txId; });
+    if (!t) {
+      const allMapped = getSchoolTransactionsWithMappedInstallments(data.transactions || []);
+      t = allMapped.find(function(x){ return String(x.id||x.firebaseId)===txId; });
     }
-    const t = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===txId; });
+    if (!t) { alert('Transaction not found'); return; }
+
+    if (t.firebaseId && !t._mappedFromInstallment) {
+      if (typeof db !== 'undefined' && currentSchoolId) {
+        await db.collection('schools').doc(currentSchoolId).collection('transactions').doc(t.firebaseId).update({ date: newDate });
+        FGCache.invalidate(currentSchoolId, 'transactions');
+        EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
+      }
+    }
+    const localT = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===txId; });
+    if (localT) localT.date = newDate;
     if (t) t.date = newDate;
+
+    // Update underlying student installment if applicable
+    if (t.studentId) {
+      const student = (data.students||[]).find(x => String(x.id||x.firebaseId) === String(t.studentId));
+      if (student) {
+        let updatedInstallments = false;
+        if (t.installmentIndex !== undefined && student.installments && student.installments[t.installmentIndex]) {
+          student.installments[t.installmentIndex].date = newDate;
+          updatedInstallments = true;
+        } else if (!student.installments || student.installments.length === 0) {
+          student.installments = [{ date: newDate, amount: student.paid || t.amount, mode: student.paymentMode || t.paymentMode || 'Cash', note: 'Initial payment' }];
+          updatedInstallments = true;
+        }
+        if (updatedInstallments && typeof db !== 'undefined' && currentSchoolId) {
+          await db.collection('schools').doc(currentSchoolId).collection('students').doc(String(student.firebaseId || student.id)).update({ installments: student.installments });
+          FGCache.invalidate(currentSchoolId, 'students');
+          EnhancedCache.del(currentSchoolId, 'students').catch(e => {});
+        }
+      }
+    }
+
+    // Update underlying other service installment if applicable
+    const svcId = t.serviceId || t.otherServiceId;
+    if (svcId) {
+      const svc = (data.otherServices||[]).find(x => String(x.id||x.firebaseId) === String(svcId));
+      if (svc && t.installmentIndex !== undefined && svc.installments && svc.installments[t.installmentIndex]) {
+        svc.installments[t.installmentIndex].date = newDate;
+        if (typeof db !== 'undefined' && currentSchoolId) {
+          await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(String(svc.firebaseId || svc.id)).update({ installments: svc.installments });
+        }
+      }
+    }
+
     document.getElementById('modal-edit-transaction')?.remove();
     renderCashflow();
     showToast('✓ Entry date updated');
   } catch(e) {
     console.error('Edit transaction date error:', e);
     alert('Error updating date: ' + (e.message||'Please try again.'));
-  }
-}
-
-// One-click fix for the "enrolled in May, entered in June" case: re-dates a
-// Student Fee cash flow entry to match its student's enrolled date, so the
-// income moves into the correct month instead of staying on the data-entry date.
-async function moveTransactionToEnrolledDate(id, enrolledDate) {
-  const txId = String(id);
-  if (!enrolledDate) { showToast('No enrollment date found for this student'); return; }
-  if (!confirm('Move this income entry to ' + enrolledDate + ' (the student\'s enrollment date)?')) return;
-  try {
-    if (typeof db !== 'undefined' && currentSchoolId) {
-      await db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId).update({ date: enrolledDate });
-      FGCache.invalidate(currentSchoolId, 'transactions');
-      EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
-    }
-    const t = (data.transactions||[]).find(function(x){ return String(x.id||x.firebaseId)===txId; });
-    if (t) t.date = enrolledDate;
-    renderCashflow();
-    showToast('✓ Moved to ' + enrolledDate);
-  } catch(e) {
-    console.error('Move transaction to enrolled date error:', e);
-    alert('Error moving entry: ' + (e.message||'Please try again.'));
-  }
-}
-
-// Bulk version of the same fix, triggered from the Cash Flow page header.
-// Scans ALL Student Fee transactions for this school (not just the currently
-// filtered month — a June-dated entry that needs to move to May wouldn't show
-// up under a May filter anyway), finds every one whose date doesn't match its
-// student's enrolled date, and moves them all in a single batched write.
-async function fixAllEnrollmentDateMismatches() {
-  if (!currentSchoolId) { showToast('Please select a school first'); return; }
-  const btn = document.getElementById('cf-fix-mismatches-btn');
-  const originalLabel = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true; btn.innerHTML = '🔍 Scanning…'; }
-
-  try {
-    const issues = (await scanEnrollmentDateIssues()).filter(iss => iss.type === 'transaction');
-
-    if (issues.length === 0) {
-      showToast('✓ No mismatches found — every income entry matches its student\'s enrolled date');
-      return;
-    }
-
-    const preview = issues.slice(0, 8)
-      .map(iss => '• ' + iss.studentName + ': ' + iss.oldDate + ' → ' + iss.newDate)
-      .join('\n');
-    const more = issues.length > 8 ? '\n…and ' + (issues.length - 8) + ' more' : '';
-    const confirmed = confirm(
-      'Found ' + issues.length + ' income entr' + (issues.length === 1 ? 'y' : 'ies') +
-      ' dated differently from the student\'s enrollment date:\n\n' + preview + more +
-      '\n\nMove all of them to their student\'s enrolled date now?'
-    );
-    if (!confirmed) return;
-
-    if (btn) btn.innerHTML = '⏳ Fixing…';
-
-    let fixed = 0, failed = 0;
-    const chunkSize = 450; // stay under Firestore's 500-write batch limit
-
-    for (let i = 0; i < issues.length; i += chunkSize) {
-      const chunk = issues.slice(i, i + chunkSize);
-      const batch = db.batch();
-      let writesInBatch = 0;
-
-      chunk.forEach(iss => {
-        try {
-          const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(iss.txId);
-          batch.update(txRef, { date: iss.newDate });
-          writesInBatch++;
-        } catch (err) {
-          console.error('Could not queue transaction fix:', err);
-          failed++;
-        }
-      });
-
-      if (writesInBatch > 0) {
-        try {
-          await batch.commit();
-          chunk.forEach(iss => {
-            const tLocal = (data.transactions || []).find(x => String(x.firebaseId || x.id) === String(iss.txId));
-            if (tLocal) tLocal.date = iss.newDate;
-          });
-          fixed += writesInBatch;
-        } catch (err) {
-          console.error('Batch commit failed:', err);
-          failed += writesInBatch;
-        }
-      }
-    }
-
-    try { FGCache.invalidate(currentSchoolId, 'transactions'); } catch (_e) {}
-    try { EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {}); } catch (_e) {}
-
-    renderCashflow();
-    showToast('✓ Fixed ' + fixed + ' entr' + (fixed === 1 ? 'y' : 'ies') + (failed ? ', ' + failed + ' failed — check console.' : ''));
-  } catch (err) {
-    console.error('fixAllEnrollmentDateMismatches error:', err);
-    alert('Error scanning/fixing entries: ' + (err.message || 'Please try again.'));
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
-  }
-}
-
-// Per-student version of the same fix, shown inside the Student Detail modal.
-// Fixes BOTH the student's first ("Initial payment") installment record and
-// the matching Student Fee cashflow transaction in one click, so this one
-// student's enrollment-date mismatch is fully resolved without needing the
-// bulk Cash Flow scan.
-async function fixStudentEnrollmentDateMismatch(studentId) {
-  const sid = String(studentId);
-  const s = (data.students || []).find(x => String(x.firebaseId || x.id) === sid);
-  if (!s || !s.enrolled) { showToast('Student or enrollment date not found'); return; }
-  if (!currentSchoolId || typeof db === 'undefined') { showToast('Not connected to a school'); return; }
-
-  const installments = Array.isArray(s.installments) ? s.installments : [];
-  const hasInstallmentMismatch = installments.length > 0 &&
-    installments[0] && installments[0].note === 'Initial payment' &&
-    installments[0].date && installments[0].date !== s.enrolled;
-
-  const nameLower = (s.name || '').trim().toLowerCase();
-  const matchedTx = (data.transactions || []).find(t =>
-    t.category === 'Student Fee' &&
-    (String(t.studentId) === sid ||
-      (!t.studentId && typeof t.desc === 'string' &&
-        t.desc.toLowerCase().indexOf('enrollment fee') !== -1 &&
-        t.desc.toLowerCase().indexOf(nameLower) !== -1))
-  );
-  const hasTxMismatch = matchedTx && matchedTx.date && matchedTx.date !== s.enrolled;
-
-  if (!hasInstallmentMismatch && !hasTxMismatch) {
-    showToast('✓ No mismatch found — already up to date');
-    return;
-  }
-
-  const parts = [];
-  if (hasInstallmentMismatch) parts.push('installment record (' + installments[0].date + ' → ' + s.enrolled + ')');
-  if (hasTxMismatch) parts.push('cash flow income entry (' + matchedTx.date + ' → ' + s.enrolled + ')');
-  if (!confirm('Move the following to ' + s.name + '\'s enrolled date (' + s.enrolled + ')?\n\n• ' + parts.join('\n• '))) return;
-
-  try {
-    const batch = db.batch();
-    let writes = 0;
-
-    if (hasInstallmentMismatch) {
-      const updatedInstallments = installments.slice();
-      updatedInstallments[0] = { ...updatedInstallments[0], date: s.enrolled };
-      const studentRef = db.collection('schools').doc(currentSchoolId).collection('students').doc(sid);
-      batch.update(studentRef, { installments: updatedInstallments });
-      writes++;
-      s.installments = updatedInstallments;
-    }
-
-    if (hasTxMismatch) {
-      const txId = String(matchedTx.firebaseId || matchedTx.id);
-      const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId);
-      batch.update(txRef, { date: s.enrolled });
-      writes++;
-      matchedTx.date = s.enrolled;
-    }
-
-    if (writes > 0) await batch.commit();
-
-    FGCache.invalidate(currentSchoolId, 'students');
-    FGCache.invalidate(currentSchoolId, 'transactions');
-    EnhancedCache.del(currentSchoolId, 'students').catch(e => {});
-    EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
-
-    showToast('✓ Fixed ' + s.name + '\'s date mismatch');
-
-    // Reopen the modal so the mismatch notice and updated dates reflect immediately
-    document.getElementById('modal-student-detail')?.remove();
-    openStudentDetailModal(s);
-  } catch (err) {
-    console.error('fixStudentEnrollmentDateMismatch error:', err);
-    alert('Error fixing mismatch: ' + (err.message || 'Please try again.'));
   }
 }
 
@@ -10878,7 +11230,7 @@ async function addTransaction() {
       schoolId: currentSchoolId
     };
     
-    await FirebaseService.addTransaction(transactionData);
+    await recordCashflowTransaction(transactionData);
     closeModal('modal-add-tx');
     addNotification(`Transaction added: ${transactionData.desc}`,'success');
   } catch (error) {
@@ -10907,7 +11259,7 @@ function onReportPeriodChange() {
 function _populateReportYearFilter() {
   const yf = document.getElementById('report-year-filter');
   if (!yf) return;
-  const schoolTx = (data.transactions||[]).filter(t => !currentSchoolId || t.schoolId === currentSchoolId);
+  const schoolTx = getSchoolTransactionsWithMappedInstallments(data.transactions || []);
   const yearsSet = new Set();
   schoolTx.forEach(function(t){ if (t.date) yearsSet.add(t.date.slice(0,4)); });
   const thisYear = new Date().getFullYear();
@@ -10998,14 +11350,13 @@ function buildIncomeExpenseSections(txList, noDataLabel) {
   );
 }
 
-function renderReport() {
+async function renderReport() {
+  await ensureStudentPaymentsSynced('reports');
   const period = document.getElementById('report-period')?.value || 'monthly';
   const rc = document.getElementById('report-content');
   if (!rc) return;
 
-  const schoolTx = (data.transactions||[]).filter(function(t){
-    return !currentSchoolId || t.schoolId === currentSchoolId;
-  });
+  const schoolTx = getSchoolTransactionsWithMappedInstallments(data.transactions || []);
 
   const schoolName = (function(){
     var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
@@ -11271,9 +11622,7 @@ function exportReportExcel() {
   const df = document.getElementById('report-day-filter');
   const yf = document.getElementById('report-year-filter');
 
-  const schoolTx = (data.transactions||[]).filter(function(t){
-    return !currentSchoolId || t.schoolId === currentSchoolId;
-  });
+  const schoolTx = getSchoolTransactionsWithMappedInstallments(data.transactions || []);
 
   const schoolName = (function(){
     var s = (userSchools||[]).find(function(s){ return s.id === currentSchoolId; });
@@ -14982,10 +15331,7 @@ function renderOtherServices() {
   page.innerHTML =
     '<div class="page-header">' +
       '<div><h2>\ud83d\udd27 Other Services</h2><p>Non-student service clients and payments</p></div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-        '<button class="btn btn-outline" id="os-fix-mismatches-btn" style="border-color:var(--warning);color:var(--warning);" onclick="fixAllServiceDateMismatches()" title="Scans all Other Service Fee entries and moves any that don\'t match the service date">📅 Fix Date Mismatches</button>' +
-        '<button class="btn btn-accent" onclick="openAddOtherServiceModal()">+ Add Service</button>' +
-      '</div>' +
+      '<button class="btn btn-accent" onclick="openAddOtherServiceModal()">+ Add Service</button>' +
     '</div>' +
     '<div class="stats-grid">' +
       '<div class="stat-card accent"><div class="sc-label">Total Clients</div><div class="sc-value" style="color:var(--primary)">' + services.length + '</div><div class="sc-sub">Service clients</div></div>' +
@@ -16542,7 +16888,7 @@ async function saveOtherService() {
     if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage();
     // Add to cashflow
     if (initialPayment > 0 && currentSchoolId) {
-      await FirebaseService.addTransaction({ date: serviceData.date, type: 'income', category: 'Other Service Fee', desc: `Service: ${clientName} — ${serviceData.serviceType}`, amount: initialPayment, schoolId: currentSchoolId });
+      await recordCashflowTransaction({ date: serviceData.date, type: 'income', category: 'Other Service Fee', desc: `Service: ${clientName} — ${serviceData.serviceType}`, amount: initialPayment, paymentMode: serviceData.paymentMode || 'Cash', serviceId: serviceData.firebaseId || serviceData.id || '', otherServiceId: serviceData.firebaseId || serviceData.id || '', clientName, schoolId: currentSchoolId });
     }
     document.getElementById('modal-add-other-service').remove();
     renderOtherServices();
@@ -16561,21 +16907,6 @@ function viewOtherService(id) {
   const svc = (data.otherServices||[]).find(s=>s.id===id||s.firebaseId===id);
   if (!svc) { showToast('Service not found'); return; }
   const bal = (svc.totalAmount||0)-(svc.amountPaid||0);
-
-  // Detect a mismatch between this service's own date and either its first
-  // ("Initial payment") installment or the matching "Other Service Fee"
-  // cashflow transaction — uses the same detection helper as the bulk scan.
-  const osIssue = _findServiceDateIssue(svc);
-  let osMismatchNotice = '';
-  if (osIssue) {
-    const safeSvcId = String(osIssue.svcId).replace(/'/g, "\\'");
-    osMismatchNotice = `
-    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-      <div style="font-size:12px;color:#92400e;">⚠ This service is dated <strong>${svc.date}</strong>, but the initial payment ${osIssue.hasInstallmentMismatch && osIssue.hasTxMismatch ? 'and income entry are' : osIssue.hasInstallmentMismatch ? 'is' : 'income entry is'} dated differently.</div>
-      <button class="btn btn-accent btn-sm" onclick="fixServiceDateMismatch('${safeSvcId}')">📅 Fix Date Mismatch</button>
-    </div>`;
-  }
-
   const old = document.getElementById('modal-view-other-service');
   if (old) old.remove();
   const modal = document.createElement('div');
@@ -16587,7 +16918,6 @@ function viewOtherService(id) {
       <h3>🔧 ${svc.clientName}</h3>
       <button class="modal-close" onclick="document.getElementById('modal-view-other-service').remove()">✕</button>
     </div>
-    ${osMismatchNotice}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
       <div style="background:var(--surface2);border-radius:10px;padding:14px 16px;">
         <div style="font-size:11px;color:var(--text2);margin-bottom:8px;">CLIENT INFO</div>
@@ -16687,189 +17017,13 @@ async function saveServiceInstallment(id) {
   svc.amountPaid = (svc.amountPaid||0) + amount;
   try {
     if (currentSchoolId && typeof db !== 'undefined') {
-      await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(String(id)).update({ installments: svc.installments, amountPaid: svc.amountPaid });
-      await FirebaseService.addTransaction({ date, type: 'income', category: 'Other Service Fee', desc: `Payment: ${svc.clientName}`, amount, schoolId: currentSchoolId });
+      await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(String(svc.firebaseId || id)).update({ installments: svc.installments, amountPaid: svc.amountPaid });
+      await recordCashflowTransaction({ date, type: 'income', category: 'Other Service Fee', desc: `Payment: ${svc.clientName}`, amount, paymentMode: mode, serviceId: svc.firebaseId || svc.id || '', otherServiceId: svc.firebaseId || svc.id || '', clientName: svc.clientName || '', schoolId: currentSchoolId });
     }
     document.getElementById('modal-view-other-service')?.remove();
     viewOtherService(id);
     renderOtherServices();
   } catch(e) { alert('Error: ' + e.message); }
-}
-
-// Scans a single Other Service record for a date mismatch between svc.date
-// and either its first ("Initial payment") installment or the matching
-// "Other Service Fee" cashflow transaction. Returns null if no mismatch.
-function _findServiceDateIssue(svc) {
-  if (!svc || !svc.date) return null;
-  const svcId = svc.firebaseId || svc.id;
-  if (!svcId) return null;
-
-  const svcInstallments = Array.isArray(svc.installments) ? svc.installments : [];
-  const hasInstallmentMismatch = svcInstallments.length > 0 &&
-    svcInstallments[0] && svcInstallments[0].note === 'Initial payment' &&
-    svcInstallments[0].date && svcInstallments[0].date !== svc.date;
-
-  const clientNameLower = (svc.clientName || '').trim().toLowerCase();
-  const matchedTx = (data.transactions || []).find(t =>
-    t.category === 'Other Service Fee' &&
-    typeof t.desc === 'string' &&
-    t.desc.toLowerCase().indexOf('service:') !== -1 &&
-    t.desc.toLowerCase().indexOf(clientNameLower) !== -1
-  );
-  const hasTxMismatch = !!(matchedTx && matchedTx.date && matchedTx.date !== svc.date);
-
-  if (!hasInstallmentMismatch && !hasTxMismatch) return null;
-  return { svc, svcId, hasInstallmentMismatch, matchedTx, hasTxMismatch };
-}
-
-// Per-service version, shown inside the Other Service detail modal. Fixes
-// BOTH the service's first installment record and its matching cashflow
-// transaction in one click — mirrors fixStudentEnrollmentDateMismatch.
-async function fixServiceDateMismatch(serviceId) {
-  const sid = String(serviceId);
-  const svc = (data.otherServices || []).find(x => String(x.firebaseId || x.id) === sid);
-  if (!svc) { showToast('Service not found'); return; }
-  if (!currentSchoolId || typeof db === 'undefined') { showToast('Not connected to a school'); return; }
-
-  const issue = _findServiceDateIssue(svc);
-  if (!issue) { showToast('✓ No mismatch found — already up to date'); return; }
-
-  const parts = [];
-  if (issue.hasInstallmentMismatch) parts.push('installment record (' + svc.installments[0].date + ' → ' + svc.date + ')');
-  if (issue.hasTxMismatch) parts.push('cash flow income entry (' + issue.matchedTx.date + ' → ' + svc.date + ')');
-  if (!confirm('Move the following to ' + svc.clientName + '\'s service date (' + svc.date + ')?\n\n• ' + parts.join('\n• '))) return;
-
-  try {
-    const batch = db.batch();
-    let writes = 0;
-
-    if (issue.hasInstallmentMismatch) {
-      const updatedInstallments = svc.installments.slice();
-      updatedInstallments[0] = { ...updatedInstallments[0], date: svc.date };
-      const svcRef = db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(sid);
-      batch.update(svcRef, { installments: updatedInstallments });
-      writes++;
-      svc.installments = updatedInstallments;
-    }
-
-    if (issue.hasTxMismatch) {
-      const txId = String(issue.matchedTx.firebaseId || issue.matchedTx.id);
-      const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId);
-      batch.update(txRef, { date: svc.date });
-      writes++;
-      issue.matchedTx.date = svc.date;
-    }
-
-    if (writes > 0) await batch.commit();
-
-    FGCache.invalidate(currentSchoolId, 'otherServices');
-    FGCache.invalidate(currentSchoolId, 'transactions');
-    EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {});
-    EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {});
-
-    showToast('✓ Fixed ' + svc.clientName + '\'s date mismatch');
-
-    document.getElementById('modal-view-other-service')?.remove();
-    viewOtherService(sid);
-    renderOtherServices();
-  } catch (err) {
-    console.error('fixServiceDateMismatch error:', err);
-    alert('Error fixing mismatch: ' + (err.message || 'Please try again.'));
-  }
-}
-
-// Bulk version, triggered from the Other Services page header. Scans every
-// service for this school, finds every installment/transaction date mismatch,
-// and fixes them all in a single batched write — mirrors fixAllEnrollmentDateMismatches.
-async function fixAllServiceDateMismatches() {
-  if (!currentSchoolId) { showToast('Please select a school first'); return; }
-  const btn = document.getElementById('os-fix-mismatches-btn');
-  const originalLabel = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true; btn.innerHTML = '🔍 Scanning…'; }
-
-  try {
-    const services = (data.otherServices || []).filter(s => !currentSchoolId || s.schoolId === currentSchoolId);
-    const issues = services.map(_findServiceDateIssue).filter(Boolean);
-
-    if (issues.length === 0) {
-      showToast('✓ No mismatches found — every service entry matches its service date');
-      return;
-    }
-
-    const preview = issues.slice(0, 8)
-      .map(iss => {
-        const bits = [];
-        if (iss.hasInstallmentMismatch) bits.push('installment');
-        if (iss.hasTxMismatch) bits.push('income entry');
-        return '• ' + iss.svc.clientName + ': ' + bits.join(' + ') + ' → ' + iss.svc.date;
-      })
-      .join('\n');
-    const more = issues.length > 8 ? '\n…and ' + (issues.length - 8) + ' more' : '';
-    const confirmed = confirm(
-      'Found ' + issues.length + ' service' + (issues.length === 1 ? '' : 's') +
-      ' with a date mismatch:\n\n' + preview + more +
-      '\n\nMove all of them to their service date now?'
-    );
-    if (!confirmed) return;
-
-    if (btn) btn.innerHTML = '⏳ Fixing…';
-
-    let fixed = 0, failed = 0;
-    const chunkSize = 200; // each issue can produce up to 2 writes; stay well under the 500-write batch limit
-
-    for (let i = 0; i < issues.length; i += chunkSize) {
-      const chunk = issues.slice(i, i + chunkSize);
-      const batch = db.batch();
-      let writesInBatch = 0;
-
-      chunk.forEach(iss => {
-        try {
-          if (iss.hasInstallmentMismatch) {
-            const updatedInstallments = iss.svc.installments.slice();
-            updatedInstallments[0] = { ...updatedInstallments[0], date: iss.svc.date };
-            const svcRef = db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(String(iss.svcId));
-            batch.update(svcRef, { installments: updatedInstallments });
-            writesInBatch++;
-            iss._pendingInstallments = updatedInstallments;
-          }
-          if (iss.hasTxMismatch) {
-            const txId = String(iss.matchedTx.firebaseId || iss.matchedTx.id);
-            const txRef = db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId);
-            batch.update(txRef, { date: iss.svc.date });
-            writesInBatch++;
-          }
-        } catch (err) {
-          console.error('Could not queue service fix:', err);
-          failed++;
-        }
-      });
-
-      if (writesInBatch > 0) {
-        try {
-          await batch.commit();
-          chunk.forEach(iss => {
-            if (iss._pendingInstallments) iss.svc.installments = iss._pendingInstallments;
-            if (iss.hasTxMismatch) iss.matchedTx.date = iss.svc.date;
-          });
-          fixed += writesInBatch;
-        } catch (err) {
-          console.error('Batch commit failed:', err);
-          failed += writesInBatch;
-        }
-      }
-    }
-
-    try { FGCache.invalidate(currentSchoolId, 'otherServices'); FGCache.invalidate(currentSchoolId, 'transactions'); } catch (_e) {}
-    try { EnhancedCache.del(currentSchoolId, 'otherServices').catch(e => {}); EnhancedCache.del(currentSchoolId, 'transactions').catch(e => {}); } catch (_e) {}
-
-    renderOtherServices();
-    showToast('✓ Fixed ' + fixed + ' record' + (fixed === 1 ? '' : 's') + (failed ? ', ' + failed + ' failed — check console.' : ''));
-  } catch (err) {
-    console.error('fixAllServiceDateMismatches error:', err);
-    alert('Error scanning/fixing services: ' + (err.message || 'Please try again.'));
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
-  }
 }
 
 function generateServiceInvoice(id) {
@@ -19984,5 +20138,5 @@ function populateFormFromStudentId(value) {
   </div>
 </div>
 
-</body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
