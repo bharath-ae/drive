@@ -2400,6 +2400,16 @@
 <script>
 // INSTRUCTOR MODULE
 // First Gear instructor workflow code.
+
+// == GLOBAL ERROR HANDLER ==
+window.addEventListener('error', function(e) {
+  console.error('❌ JS ERROR:', e.message, '| file:', e.filename, '| line:', e.lineno, '| col:', e.colno);
+  if (e.error && e.error.stack) console.error('Stack:', e.error.stack);
+});
+window.addEventListener('unhandledrejection', function(e) {
+  console.error('❌ UNHANDLED PROMISE:', e.reason);
+  if (e.reason && e.reason.stack) console.error('Stack:', e.reason.stack);
+});
 // ============================================================
       // NAVIGATION
       // ============================================================
@@ -6612,12 +6622,18 @@ function selectRole(role) {
   });
 }
 async function doLogin() {
+  console.log('🔐 doLogin() called');
   // Get current role from UI — declared once, used throughout
   const activeRole = document.querySelector('.role-btn.active');
   const selectedRole = activeRole ? activeRole.id.replace('role-', '') : 'owner';
   const loginBtn = document.querySelector('.btn-login');
   const originalText = loginBtn ? loginBtn.textContent : 'Sign In →';
 
+  console.log('doLogin: selectedRole=' + selectedRole + ', loginBtn found=' + !!loginBtn);
+  if (typeof auth === 'undefined' || !auth) {
+    alert('Firebase Auth is not initialized. Please check your internet connection and reload the page.');
+    return;
+  }
   if (loginBtn) { loginBtn.textContent = 'Signing In...'; loginBtn.disabled = true; }
 
   // Prevent onAuthStateChanged from also running while we handle login manually
@@ -13720,10 +13736,10 @@ function renderVehicles() {
           </div>
           
           <div style="display: flex; gap: 8px; justify-content: space-between;">
-            <button class="btn btn-sm btn-outline" onclick="viewVehicleDetails(${JSON.stringify(vehicle.firebaseId||vehicle.id)})" style="flex: 1;">
+            <button class="btn btn-sm btn-outline" onclick="viewVehicleDetails('${(vehicle.firebaseId||vehicle.id||'').replace(/'/g, "\\'")}')" style="flex: 1;">
               📋 Details
             </button>
-            <button class="btn btn-sm btn-primary" onclick="scheduleMaintenance(${JSON.stringify(vehicle.firebaseId||vehicle.id)})" style="flex: 1;">
+            <button class="btn btn-sm btn-primary" onclick="scheduleMaintenance('${(vehicle.firebaseId||vehicle.id||'').replace(/'/g, "\\'")}')" style="flex: 1;">
               🔧 Service
             </button>
           </div>
@@ -17073,9 +17089,9 @@ function viewOtherService(id) {
       </div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap;">
-      ${currentRole==='owner' ? `<button class="btn btn-accent" onclick="openEditOtherService(${JSON.stringify(svc.id||svc.firebaseId)});document.getElementById('modal-view-other-service').remove()">✏️ Edit</button>` : ''}
-      <button class="btn btn-outline" onclick="printForm15ForService(${JSON.stringify(svc.id||svc.firebaseId)})">🖨️ Form 15</button>
-      <button class="btn btn-primary" onclick="generateServiceInvoice(${JSON.stringify(svc.id)})">🧾 Invoice</button>
+      ${currentRole==='owner' ? `<button class="btn btn-accent" onclick="openEditOtherService('${(svc.id||svc.firebaseId||'').replace(/'/g, "\\'")}');document.getElementById('modal-view-other-service').remove()">✏️ Edit</button>` : ''}
+      <button class="btn btn-outline" onclick="printForm15ForService('${(svc.id||svc.firebaseId||'').replace(/'/g, "\\'")}')">🖨️ Form 15</button>
+      <button class="btn btn-primary" onclick="generateServiceInvoice('${(svc.id||'').replace(/'/g, "\\'")}')">🧾 Invoice</button>
       <button class="btn btn-outline" onclick="document.getElementById('modal-view-other-service').remove()">Close</button>
     </div>
   </div>`;
@@ -17518,6 +17534,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>
 // ADMIN MODULE
 // First Gear admin and staff management code.
+
+
 // ADMIN MANAGEMENT
 // ============================================================
 
@@ -17617,8 +17635,8 @@ function renderAdminsTable() {
       <td style="color:var(--text2);font-size:12px;">${admin.addedOn || admin.createdAt || 'Unknown'}</td>
       <td>
         <div style="display:flex;gap:5px;">
-          <button class="btn btn-outline btn-sm" onclick="editAdmin('${admin.email || 'unknown'}')" data-action="edit_admin">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="removeAdmin('${admin.email || 'unknown'}')" data-action="remove_admin">Remove</button>
+          <button class="btn btn-outline btn-sm" onclick="editAdmin('${(admin.email||'unknown').replace(/'/g, "\\'")}')" data-action="edit_admin">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="removeAdmin('${(admin.email||'unknown').replace(/'/g, "\\'")}')" data-action="remove_admin">Remove</button>
         </div>
       </td>
     </tr>
@@ -17977,60 +17995,67 @@ function editAdmin(adminId) {
     return;
   }
   
-  console.log('Looking for admin with ID:', adminId);
-  console.log('All admins in data.admins:', data.admins.map((a, i) => ({
-    index: i,
-    id: a.id,
-    firebaseId: a.firebaseId,
-    name: a.name,
-    email: a.email
-  })));
-  
-  const admin = data.admins.find(a => 
-    a.email === adminId || 
-    a.userId === adminId || 
-    a.firebaseId === adminId || 
-    a.id === adminId
-  );
-  console.log('Found admin:', admin);
-  
-  if (!admin) {
-    console.log('Admin not found for ID:', adminId);
-    console.log('Available admins:', data.admins.map(a => ({id: a.id, firebaseId: a.firebaseId, name: a.name})));
-    alert('Administrator not found');
-    return;
+  try {
+    console.log('Looking for admin with ID:', adminId);
+    console.log('All admins in data.admins:', data.admins.map((a, i) => ({
+      index: i,
+      id: a.id,
+      firebaseId: a.firebaseId,
+      name: a.name,
+      email: a.email
+    })));
+    
+    const admin = data.admins.find(a => 
+      a.email === adminId || 
+      a.userId === adminId || 
+      a.firebaseId === adminId || 
+      a.id === adminId
+    );
+    console.log('Found admin:', admin);
+    
+    if (!admin) {
+      console.log('Admin not found for ID:', adminId);
+      console.log('Available admins:', data.admins.map(a => ({id: a.id, firebaseId: a.firebaseId, name: a.name})));
+      alert('Administrator not found');
+      return;
+    }
+    
+    // Populate school dropdown
+    populateAdminSchoolDropdown();
+    
+    // Populate modal with admin data
+    document.getElementById('admin-name').value = admin.name || '';
+    document.getElementById('admin-email').value = admin.email || '';
+    document.getElementById('admin-password').value = '';
+    document.getElementById('admin-confirm-password').value = '';
+    document.getElementById('admin-role').value = admin.role || 'office';
+    document.getElementById('admin-phone').value = admin.phone || '';
+    
+    // Set school selection
+    if (admin.schoolId) {
+      document.getElementById('admin-school').value = admin.schoolId;
+    }
+    
+    // Set permissions (with fallback for legacy admins without permissions field)
+    const perms = admin.permissions || { students: true, transactions: true, attendance: true, reports: true };
+    document.getElementById('perm-students').checked = Boolean(perms.students);
+    document.getElementById('perm-transactions').checked = Boolean(perms.transactions);
+    document.getElementById('perm-attendance').checked = Boolean(perms.attendance);
+    document.getElementById('perm-reports').checked = Boolean(perms.reports);
+    
+    // Change button text and onclick
+    const addBtn = document.querySelector('#modal-add-admin .btn-accent[data-action="add_admin"]');
+    if (addBtn) {
+      addBtn.textContent = 'Update Administrator';
+      addBtn.setAttribute('data-action', 'edit_admin');
+      addBtn.onclick = () => updateAdmin(adminId);
+    }
+    
+    openModal('modal-add-admin');
+  } catch (error) {
+    console.error('Error opening admin edit modal:', error);
+    alert('Error loading administrator data: ' + error.message + '. Please try again.');
   }
-  
-  // Populate school dropdown
-  populateAdminSchoolDropdown();
-  
-  // Populate modal with admin data
-  document.getElementById('admin-name').value = admin.name;
-  document.getElementById('admin-email').value = admin.email;
-  document.getElementById('admin-password').value = '';
-  document.getElementById('admin-confirm-password').value = '';
-  document.getElementById('admin-role').value = admin.role;
-  document.getElementById('admin-phone').value = admin.phone;
-  
-  // Set school selection
-  if (admin.schoolId) {
-    document.getElementById('admin-school').value = admin.schoolId;
-  }
-  
-  // Set permissions
-  document.getElementById('perm-students').checked = admin.permissions.students;
-  document.getElementById('perm-transactions').checked = admin.permissions.transactions;
-  document.getElementById('perm-attendance').checked = admin.permissions.attendance;
-  document.getElementById('perm-reports').checked = admin.permissions.reports;
-  
-  // Change button text and onclick
-  const addBtn = document.querySelector('button[onclick="addAdminFromModal()"]');
-  if (addBtn) {
-    addBtn.textContent = 'Update Administrator';
-    addBtn.onclick = () => updateAdmin(adminId);
-  }
-  
-  openModal('modal-add-admin');
 }
 
 // Update admin
@@ -18076,8 +18101,13 @@ async function updateAdmin(adminId) {
       reports: document.getElementById('perm-reports').checked
     };
     
-    // Update admin data
-    const adminIndex = data.admins.findIndex(a => a.id === adminId);
+    // Update admin data — search using the same multi-identifier logic as editAdmin
+    const adminIndex = data.admins.findIndex(a =>
+      a.email === adminId ||
+      a.userId === adminId ||
+      a.firebaseId === adminId ||
+      a.id === adminId
+    );
     if (adminIndex !== -1) {
       const admin = data.admins[adminIndex];
       const updatedAdmin = {
@@ -18116,9 +18146,10 @@ async function updateAdmin(adminId) {
     }
     
     // Reset button
-    const addBtn = document.querySelector('button[onclick*="updateAdmin"]');
+    const addBtn = document.querySelector('#modal-add-admin .btn-accent[data-action="edit_admin"]');
     if (addBtn) {
       addBtn.textContent = 'Add Administrator';
+      addBtn.setAttribute('data-action', 'add_admin');
       addBtn.onclick = addAdminFromModal;
     }
     
@@ -18236,6 +18267,24 @@ function toggleLoginPasswordVisibility() {
 // Open admin modal with school dropdown populated
 function openAdminModal() {
   populateAdminSchoolDropdown();
+  // Reset button to "Add" state in case it was left in "Update" mode
+  const addBtn = document.querySelector('#modal-add-admin .btn-accent[data-action="add_admin"]');
+  if (addBtn) {
+    addBtn.textContent = 'Add Administrator';
+    addBtn.onclick = addAdminFromModal;
+  }
+  // Reset form fields
+  document.getElementById('admin-school').value = '';
+  document.getElementById('admin-name').value = '';
+  document.getElementById('admin-email').value = '';
+  document.getElementById('admin-password').value = '';
+  document.getElementById('admin-confirm-password').value = '';
+  document.getElementById('admin-phone').value = '';
+  document.getElementById('admin-role').value = 'office';
+  document.getElementById('perm-students').checked = true;
+  document.getElementById('perm-transactions').checked = true;
+  document.getElementById('perm-attendance').checked = true;
+  document.getElementById('perm-reports').checked = true;
   openModal('modal-add-admin');
 }
 
@@ -18466,8 +18515,8 @@ function renderStaffTable() {
       <td style="color:var(--text2);font-size:12px;">${s.joinedOn || s.createdAt || 'Unknown'}</td>
       <td>
         <div style="display:flex;gap:5px;">
-          <button class="btn btn-outline btn-sm" onclick="editStaff(${JSON.stringify(s.id||'unknown')})" data-action="edit_staff">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="removeStaff(${JSON.stringify(s.id||'unknown')})" data-action="delete_staff">Remove</button>
+          <button class="btn btn-outline btn-sm" onclick="editStaff('${(s.id||'unknown').replace(/'/g, "\\'")}')" data-action="edit_staff">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="removeStaff('${(s.id||'unknown').replace(/'/g, "\\'")}')" data-action="delete_staff">Remove</button>
         </div>
       </td>
     </tr>
@@ -20222,5 +20271,5 @@ function populateFormFromStudentId(value) {
   </div>
 </div>
 
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1524a8dd9a5d86d',t:'MTc4MzA0Mzk3MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1524a8dd9a5d86d',t:'MTc4MzA0Mzk3MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1551e1d6920b277',t:'MTc4MzA3MzYwNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
