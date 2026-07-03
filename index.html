@@ -9788,6 +9788,7 @@ function switchStudentDetailTab(tab) {
 function getStudentDetailSectionContent(s, tab) {
   const studentId = s.firebaseId || s.id || 'unknown';
   const llNumber = s.llNumber || '';
+  const llIssueDate = s.llIssueDate || '';
   const llValidity = s.llValidity || '';
   const dlNumber = s.dlNumber || '';
   const dlValidFrom = s.dlValidFrom || '';
@@ -9803,8 +9804,10 @@ function getStudentDetailSectionContent(s, tab) {
         <div style="font-size:13px;font-weight:600;margin-bottom:12px;">📝 Learner Licence (LL) Information</div>
         <div class="form-grid">
           <div class="form-group"><label>LL Number</label><input type="text" id="ll-number-${studentId}" value="${llNumber}" placeholder="LL number"></div>
+          <div class="form-group"><label>LL Issue Date</label><input type="date" id="ll-issue-${studentId}" value="${llIssueDate}"></div>
           <div class="form-group"><label>LL Valid Until</label><input type="date" id="ll-validity-${studentId}" value="${llValidity}"></div>
         </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:8px;">📄 LL Issue Date is used to auto-fill the training period ("prescribed for a period from...") on Form 5.</div>
         <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
           <button class="btn btn-accent" onclick="saveStudentCredentialDetails('${studentId}')">Save LL Info</button>
           <span id="student-detail-save-msg" style="font-size:13px;color:var(--success);"></span>
@@ -9845,11 +9848,12 @@ function getStudentDetailSectionContent(s, tab) {
       </div>`;
   }
 
-  const llSummary = llNumber || llValidity ? `
+  const llSummary = llNumber || llIssueDate || llValidity ? `
       <div style="background:#f8fafc;border-radius:10px;padding:14px;margin-bottom:12px;">
         <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">LL Summary</div>
         <div style="font-size:13px;line-height:1.8;">
           <strong>LL Number:</strong> ${llNumber || '—'}<br>
+          <strong>Issue Date:</strong> ${llIssueDate || '—'}<br>
           <strong>Valid Until:</strong> ${llValidity || '—'}
         </div>
       </div>` : '';
@@ -9893,6 +9897,7 @@ async function saveStudentCredentialDetails(studentId) {
   const id = String(studentId || (window.__studentDetailModalData && (window.__studentDetailModalData.firebaseId || window.__studentDetailModalData.id)) || '');
   const fields = {
     llNumber: `ll-number-${id}`,
+    llIssueDate: `ll-issue-${id}`,
     llValidity: `ll-validity-${id}`,
     dlNumber: `dl-number-${id}`,
     dlValidFrom: `dl-valid-from-${id}`,
@@ -19798,6 +19803,8 @@ function populateForm14FromStudent(student) {
   set('fm-enrollDate', student.enrolled || '');
   set('fm-llNumber', student.llNumber || '');
   set('fm-llValidity', student.llValidity || '');
+  // LL Issue Date feeds Form 5's training period ("prescribed for a period from...to")
+  set('fm-startDate', student.llIssueDate || '');
   set('fm-dlNumber', student.dlNumber || '');
   set('fm-dlValidFrom', student.dlValidFrom || '');
   set('fm-dlValidTo', student.dlValidUpto || student.dlValidTo || '');
@@ -20112,6 +20119,8 @@ function populateFormFromStudentId(value) {
   if (student.fatherName || student.agentName || student.guardianName) setVal('fm-guardianName', student.fatherName || student.agentName || student.guardianName);
   if (student.llNumber) setVal('fm-llNumber', student.llNumber);
   if (student.llValidity) setVal('fm-llValidity', student.llValidity);
+  // LL Issue Date feeds Form 5's training period ("prescribed for a period from...to")
+  if (student.llIssueDate) setVal('fm-startDate', student.llIssueDate);
   if (student.dlNumber) setVal('fm-dlNumber', student.dlNumber);
   if (student.dlValidFrom) setVal('fm-dlValidFrom', student.dlValidFrom);
   if (student.dlValidTo) setVal('fm-dlValidTo', student.dlValidTo);
