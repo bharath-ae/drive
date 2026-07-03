@@ -14902,7 +14902,7 @@ function openEditStudentModal(s) {
             ${['Active','Pending','Completed','Dropped'].map(st=>`<option ${s.status===st?'selected':''}>${st}</option>`).join('')}
           </select>
         </div>
-        <div class="form-group"><label>Enrollment Date</label><input type="date" id="edit-s-enrolled" value="${s.enrolled||''}"></div>
+        <div class="form-group"><label>Enrollment Date</label><input type="date" id="edit-s-enrolled" value="${s.enrolled||''}" onchange="onEnrollDateChange(this)"><div id="enroll-date-sync-note" style="display:none;margin-top:4px;font-size:11px;color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:4px 8px;">🔄 Related installment &amp; cashflow records will be synced automatically</div></div>
         <div class="form-group full"><label>Instructor Signature</label>
           ${s.instructorSignatureUrl ? `<img src="${s.instructorSignatureUrl}" style="max-height:60px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px;display:block;">` : ''}
           <input type="file" id="edit-s-instructor-signature" accept="image/*" style="font-size:13px;">
@@ -14932,6 +14932,12 @@ function openEditStudentModal(s) {
 function populateEditInstructorDropdown(s) {
   const sel = document.getElementById('edit-s-instructor');
   if (!sel) return;
+
+  // Store original enrollment date for change detection
+  const enrollInput = document.getElementById('edit-s-enrolled');
+  if (enrollInput) {
+    enrollInput.dataset.originalValue = enrollInput.value || '';
+  }
 
   const staffInst  = (data.staff  || []).filter(function(x){ return x.role === 'instructor'; });
   const adminInst  = (data.admins || []).filter(function(x){ return x.role === 'instructor'; });
@@ -14971,6 +14977,15 @@ function populateEditInstructorDropdown(s) {
     }
     sel.appendChild(opt);
   });
+}
+
+// Show / hide the enrollment-date sync note when the date is changed
+function onEnrollDateChange(input) {
+  const note = document.getElementById('enroll-date-sync-note');
+  if (!note) return;
+  const original = input.dataset.originalValue || '';
+  const changed = input.value && original && input.value !== original;
+  note.style.display = changed ? 'block' : 'none';
 }
 
 async function saveEditStudent(studentId) {
@@ -15016,16 +15031,85 @@ async function saveEditStudent(studentId) {
   else if (instFile) { updates.instructorSignatureUrl = await readFileAsDataURL(instFile); }
   if (traineeSigClear) { updates.traineeSignatureUrl = ''; }
   else if (traineeFile) { updates.traineeSignatureUrl = await readFileAsDataURL(traineeFile); }
+
+  // ── Smooth enrollment date sync ──────────────────────────────
+  // If the enrollment date changed, automatically update the related
+  // installment record and cashflow entry so everything stays in sync.
+  const newEnrolled = updates.enrolled;
+  const local = data.students.find(x => String(x.firebaseId)===String(studentId)||String(x.id)===String(studentId));
+  const oldEnrolled = local ? (local.enrolled || '') : '';
+  const enrolledDateChanged = newEnrolled && oldEnrolled && newEnrolled !== oldEnrolled;
+  let syncedRecords = 0; // count of records we patched
+
+  if (enrolledDateChanged && currentSchoolId && typeof db !== 'undefined') {
+    try {
+      // 1) Update the first ("Initial payment") installment date
+      if (local && Array.isArray(local.installments) && local.installments.length > 0) {
+        const first = local.installments[0];
+        if (first && first.note === 'Initial payment') {
+          first.date = newEnrolled;
+          updates.installments = local.installments.slice(); // clone for Firestore
+          syncedRecords++;
+        }
+      }
+
+      // 2) Update the matching cashflow / income entry
+      const nameLower = (local ? local.name || '' : '').trim().toLowerCase();
+      // Find the enrollment-fee transaction — try exact studentId first, then desc match
+      let matchTx = (data.transactions || []).find(t =>
+        !currentSchoolId || t.schoolId === currentSchoolId &&
+        t.studentId && String(t.studentId) === String(studentId) &&
+        t.category === 'Student Fee'
+      );
+      if (!matchTx && nameLower) {
+        matchTx = (data.transactions || []).find(t =>
+          (!currentSchoolId || t.schoolId === currentSchoolId) &&
+          t.category === 'Student Fee' &&
+          typeof t.desc === 'string' &&
+          t.desc.toLowerCase().indexOf('enrollment fee') !== -1 &&
+          t.desc.toLowerCase().indexOf(nameLower) !== -1
+        );
+      }
+      // Fallback: any Student Fee for this student (earliest one)
+      if (!matchTx) {
+        const candidates = (data.transactions || []).filter(t =>
+          (!currentSchoolId || t.schoolId === currentSchoolId) &&
+          t.studentId && String(t.studentId) === String(studentId) &&
+          t.category === 'Student Fee'
+        );
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+          matchTx = candidates[0];
+        }
+      }
+
+      if (matchTx) {
+        const txId = matchTx.firebaseId || matchTx.id;
+        if (txId) {
+          await db.collection('schools').doc(currentSchoolId).collection('transactions').doc(txId).update({ date: newEnrolled });
+          matchTx.date = newEnrolled; // update in-memory too
+          syncedRecords++;
+        }
+      }
+    } catch (syncErr) {
+      console.warn('Enrollment date sync (non-fatal):', syncErr.message);
+    }
+  }
+
   try {
     if (!currentSchoolId || typeof db === 'undefined') {
       throw new Error('No active school selected or database not available.');
     }
     await FirebaseService.updateStudent(String(studentId), updates);
-    const local = data.students.find(x => String(x.firebaseId)===String(studentId)||String(x.id)===String(studentId));
     if (local) Object.assign(local, updates);
     document.getElementById('modal-edit-student').remove();
     renderStudentsTable();
-    showToast('✅ Student updated!');
+    if (enrolledDateChanged && syncedRecords > 0) {
+      showToast('✅ Student updated! Enrollment date synced to ' + syncedRecords + ' related record(s).');
+      addNotification('Enrollment date for "' + (updates.name || 'student') + '" changed from ' + oldEnrolled + ' to ' + newEnrolled + '. ' + syncedRecords + ' related record(s) updated automatically.', 'success');
+    } else {
+      showToast('✅ Student updated!');
+    }
   } catch(e) {
     console.error('Edit student error:', e);
     alert('Error saving. Please try again. ' + (e.message || ''));
@@ -20138,5 +20222,5 @@ function populateFormFromStudentId(value) {
   </div>
 </div>
 
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1524a8dd9a5d86d',t:'MTc4MzA0Mzk3MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
