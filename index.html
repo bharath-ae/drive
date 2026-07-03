@@ -5073,6 +5073,16 @@ const FirebaseService = {
 
   // Specific operations for students
   async addStudent(studentData) {
+    // Assign a permanent, sequential invoice/bill number once, at creation time,
+    // so every invoice printed for this student later reuses the same number.
+    if (!studentData.invoiceNo) {
+      try {
+        const inv = await getNextInvoiceNumber();
+        studentData.invoiceNo = inv.prefix + String(inv.counter).padStart(6, '0');
+      } catch (e) {
+        console.warn('Could not assign invoice number to new student:', e && e.message);
+      }
+    }
     return this.addDocument(this.studentsRef, studentData);
   },
 
@@ -15169,8 +15179,23 @@ function generateStudentInvoice(id) {
   // Generate invoice asynchronously for auto-increment
   (async function() {
     try {
-      const invoiceData = await getNextInvoiceNumber();
-      const invoiceNo = invoiceData.prefix + String(invoiceData.counter).padStart(6, '0');
+      let invoiceNo = s.invoiceNo;
+      if (!invoiceNo) {
+        // Backfill: this student was created before invoice numbers were
+        // permanently assigned. Assign one now and save it so every future
+        // invoice for this student reuses this exact same number.
+        const invoiceData = await getNextInvoiceNumber();
+        invoiceNo = invoiceData.prefix + String(invoiceData.counter).padStart(6, '0');
+        s.invoiceNo = invoiceNo;
+        try {
+          const sid = s.firebaseId || s.id;
+          if (sid && currentSchoolId && typeof db !== 'undefined') {
+            await db.collection('schools').doc(currentSchoolId).collection('students').doc(String(sid)).update({ invoiceNo });
+          }
+        } catch (persistErr) {
+          console.warn('Could not persist invoice number for student:', persistErr && persistErr.message);
+        }
+      }
       const totalFee = s.totalFee||0;
       const paid = s.paid||0;
       const balance = totalFee - paid;
@@ -16965,6 +16990,18 @@ async function saveOtherService() {
   };
   try {
     if (agentName) ensureAgentRegistered(agentName);
+    // Assign a permanent, sequential invoice/bill number once, at creation time,
+    // so every invoice printed for this service later reuses the same number.
+    // Uses the same school-wide counter as students, so numbers append in the
+    // order records are added (student or other service).
+    if (!serviceData.invoiceNo) {
+      try {
+        const inv = await getNextInvoiceNumber();
+        serviceData.invoiceNo = inv.prefix + String(inv.counter).padStart(6, '0');
+      } catch (e) {
+        console.warn('Could not assign invoice number to new service:', e && e.message);
+      }
+    }
     if (currentSchoolId && typeof db !== 'undefined') {
       try {
         const docRef = await db.collection('schools').doc(currentSchoolId).collection('otherServices').add(serviceData);
@@ -17126,11 +17163,28 @@ async function saveServiceInstallment(id) {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
-function generateServiceInvoice(id) {
+async function generateServiceInvoice(id) {
   const svc = (data.otherServices||[]).find(s=>s.id===id||s.firebaseId===id);
   if (!svc) return;
   const bal = (svc.totalAmount||0)-(svc.amountPaid||0);
-  const invoiceNo = 'SINV-' + (id||'').toString().slice(-6).toUpperCase();
+  let invoiceNo = svc.invoiceNo;
+  if (!invoiceNo) {
+    // Backfill: this service record was created before invoice numbers were
+    // permanently assigned. Assign one now and save it so every future
+    // invoice for this client reuses this exact same number.
+    try {
+      const invoiceData = await getNextInvoiceNumber();
+      invoiceNo = invoiceData.prefix + String(invoiceData.counter).padStart(6, '0');
+      svc.invoiceNo = invoiceNo;
+      const sid = svc.firebaseId || svc.id;
+      if (sid && currentSchoolId && typeof db !== 'undefined') {
+        await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(String(sid)).update({ invoiceNo });
+      }
+    } catch (e) {
+      console.warn('Could not assign invoice number to service:', e && e.message);
+      invoiceNo = 'SINV-' + (id||'').toString().slice(-6).toUpperCase();
+    }
+  }
   const today = new Date().toLocaleDateString('en-IN',{year:'numeric',month:'long',day:'numeric'});
   const schoolName = (userSchools.find(sc=>sc.id===currentSchoolId)||{}).name||'First Gear School';
   const old = document.getElementById('modal-service-invoice');
