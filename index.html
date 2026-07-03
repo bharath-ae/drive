@@ -932,6 +932,7 @@
           <div class="form-grid">
             <div class="form-group"><label>Full Name *</label><input type="text" id="s-name" placeholder="Enter full name"></div>
             <div class="form-group"><label>Date of Birth *</label><input type="date" id="s-dob"></div>
+            <div class="form-group"><label>Father's / Guardian's Name</label><input type="text" id="s-father-name" placeholder="Father's or guardian's full name"></div>
             <div class="form-group"><label>Phone Number *</label><input type="tel" id="s-phone" placeholder="10-digit number"></div>
             <div class="form-group"><label>Email</label><input type="email" id="s-email" placeholder="email@example.com"></div>
             <div class="form-group full"><label>FCM Token (optional)</label><textarea id="s-fcm-token" placeholder="Paste student FCM token here"></textarea></div>
@@ -1789,6 +1790,7 @@
         <div class="form-group"><label>Full Name *</label><input type="text" id="qs-name" placeholder="Student full name"></div>
         <div class="form-group"><label>Student ID</label><input type="text" id="qs-student-id" placeholder="Optional student ID"></div>
         <div class="form-group"><label>Date of Birth *</label><input type="date" id="qs-dob"></div>
+        <div class="form-group"><label>Father's / Guardian's Name</label><input type="text" id="qs-father-name" placeholder="Father's or guardian's full name"></div>
         <div class="form-group"><label>Phone Number *</label><input type="tel" id="qs-phone" placeholder="10-digit mobile"></div>
         <div class="form-group"><label>Email Address</label><input type="email" id="qs-email" placeholder="student@email.com"></div>
         <div class="form-group full"><label>FCM Token (optional)</label><textarea id="qs-fcm-token" style="min-height:70px;" placeholder="Paste student FCM token here"></textarea></div>
@@ -9169,6 +9171,7 @@ async function addStudentFromModal() {
       status: document.getElementById('qs-status').value,
       enrolled: enrolledDate,
       dob: document.getElementById('qs-dob').value || '',
+      fatherName: document.getElementById('qs-father-name')?.value.trim() || '',
       address: document.getElementById('qs-address').value || '',
       email: document.getElementById('qs-email').value || '',
       fcmToken: document.getElementById('qs-fcm-token').value.trim() || '',
@@ -9290,6 +9293,7 @@ async function enrollStudent() {
       status: 'Active',
       enrolled: document.getElementById('s-enroll').value || new Date().toISOString().split('T')[0],
       dob: document.getElementById('s-dob').value,
+      fatherName: document.getElementById('s-father-name')?.value.trim() || '',
       address: document.getElementById('s-address').value,
       aadhaar: document.getElementById('s-aadhaar').value,
       schoolId: currentSchoolId,
@@ -9879,6 +9883,7 @@ function getStudentDetailSectionContent(s, tab) {
         <div style="font-size:13px;line-height:1.8;color:var(--text2);">
           Use the LL, DL and Application tabs to save licence data. This information will be available when you create Form 14 records.
         </div>
+        <button class="btn btn-outline btn-sm" style="align-self:flex-start;" onclick="openAddFormModal('Form 5', '${String(studentId).replace(/'/g, "\\'")}')">Create Form 5 from this student</button>
         <button class="btn btn-primary btn-sm" style="align-self:flex-start;" onclick="openAddFormModal('Form 14', '${String(studentId).replace(/'/g, "\\'")}')">Create Form 14 from this student</button>
       </div>
     </div>`;
@@ -14880,6 +14885,7 @@ function openEditStudentModal(s) {
         <div class="form-group"><label>Full Name *</label><input type="text" id="edit-s-name" value="${s.name||''}"></div>
         <div class="form-group"><label>Phone *</label><input type="tel" id="edit-s-phone" value="${s.phone||''}"></div>
         <div class="form-group"><label>Date of Birth</label><input type="date" id="edit-s-dob" value="${s.dob||''}"></div>
+        <div class="form-group"><label>Father's / Guardian's Name</label><input type="text" id="edit-s-father-name" value="${s.fatherName||''}" placeholder="Father's or guardian's full name"></div>
         <div class="form-group"><label>Email</label><input type="email" id="edit-s-email" value="${s.email||''}"></div>
         <div class="form-group full"><label>Address</label><textarea id="edit-s-address" style="min-height:60px;">${s.address||''}</textarea></div>
         <div class="form-group"><label>Aadhaar</label><input type="text" id="edit-s-aadhaar" value="${s.aadhaar||''}"></div>
@@ -15024,6 +15030,7 @@ async function saveEditStudent(studentId) {
   const updates = {
     name, phone,
     dob: document.getElementById('edit-s-dob')?.value||'',
+    fatherName: document.getElementById('edit-s-father-name')?.value.trim()||'',
     email: document.getElementById('edit-s-email')?.value||'',
     address: document.getElementById('edit-s-address')?.value||'',
     aadhaar: document.getElementById('edit-s-aadhaar')?.value||'',
@@ -19786,7 +19793,7 @@ function populateForm14FromStudent(student) {
   set('fm-candidateName', student.name || '');
   set('fm-phone', student.phone || '');
   set('fm-address', student.address || '');
-  set('fm-guardianName', student.agentName || student.guardianName || '');
+  set('fm-guardianName', student.fatherName || student.agentName || student.guardianName || '');
   set('fm-dob', student.dob || '');
   set('fm-enrollDate', student.enrolled || '');
   set('fm-llNumber', student.llNumber || '');
@@ -19798,6 +19805,9 @@ function populateForm14FromStudent(student) {
   set('fm-llAppDob', student.llAppDob || '');
   set('fm-dlAppNumber', student.dlAppNumber || '');
   set('fm-dlAppDob', student.dlAppDob || '');
+  var vehicleClass = mapStudentVehicleClass(student.vehicle || '');
+  if (vehicleClass) set('fm-vehicleClass', vehicleClass);
+  if (student.vehicleNumber) set('fm-vehicleNumber', student.vehicleNumber);
 }
 
 function openAddFormModal(formType, studentId) {
@@ -19823,7 +19833,7 @@ function openAddFormModal(formType, studentId) {
   var photoInput = document.getElementById('fm-photo'); if (photoInput) photoInput.value = '';
   var photoPreview = document.getElementById('fm-photo-preview'); if (photoPreview) photoPreview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
   _formPhotoDataURL = '';
-  if (studentId && _activeFormType === 'Form 14') {
+  if (studentId && (_activeFormType === 'Form 14' || _activeFormType === 'Form 5')) {
     var student = data.students.find(function(x){ return String(x.firebaseId)===String(studentId) || String(x.id)===String(studentId); });
     populateForm14FromStudent(student);
   }
@@ -19854,6 +19864,7 @@ function editFormRecord(id) {
   set('fm-phone',         f.phone);
   set('fm-address',       f.address);
   set('fm-vehicleClass',  f.vehicleClass);
+  set('fm-guardianName',  f.guardianName);
   set('fm-status',        f.status||'Pending');
   if (_activeFormType === 'Form 5') {
     set('fm-vehicleNumber', f.vehicleNumber);
@@ -19867,7 +19878,6 @@ function editFormRecord(id) {
     set('fm-form15-rtoOffice',   f.rtoOffice);
   } else {
     // Form 14
-    set('fm-guardianName',  f.guardianName);
     set('fm-dob',           f.dob);
     set('fm-enrollDate',    f.enrollDate);
     set('fm-endDate14',     f.endDate);
@@ -19940,6 +19950,7 @@ async function saveFormRecord() {
     phone:         get('fm-phone'),
     address:       get('fm-address'),
     vehicleClass:  get('fm-vehicleClass'),
+    guardianName:  get('fm-guardianName'),
     status:        get('fm-status') || 'Pending',
     updatedAt:     new Date().toISOString()
   };
@@ -19955,7 +19966,6 @@ async function saveFormRecord() {
     record.rtoOffice     = get('fm-form15-rtoOffice');
   } else {
     // Form 14
-    record.guardianName  = get('fm-guardianName');
     record.dob           = get('fm-dob');
     record.enrollDate    = get('fm-enrollDate');
     record.endDate       = get('fm-endDate14');
@@ -20073,10 +20083,14 @@ function getStudentForFormLookup(value) {
 function mapStudentVehicleClass(vehicle) {
   if (!vehicle) return '';
   var v = String(vehicle).trim().toLowerCase();
-  if (v.includes('lmv') || v.includes('4-wheeler') || v.includes('4 wheeler') || v.includes('four')) return 'LMV';
-  if (v.includes('mcwg') || v.includes('2-wheeler') || v.includes('2 wheeler') || v.includes('gear') || v.includes('motorcycle')) return 'MCWG';
+  // Combined 2W+4W enrolments first, so they don't get caught by the single-class checks below
+  if (v.includes('both') || (v.includes('2w') && v.includes('4w'))) return 'LMV + MCWG';
+  // Check "gearless"/MCWOG BEFORE the generic "gear" check below —
+  // otherwise "Gearless" matches .includes('gear') and always mapped to MCWG.
   if (v.includes('mcwog') || v.includes('gearless')) return 'MCWOG';
+  if (v.includes('mcwg') || v.includes('2-wheeler') || v.includes('2 wheeler') || v.includes('gear') || v.includes('motorcycle')) return 'MCWG';
   if (v.includes('hmv') || v.includes('heavy')) return 'HMV';
+  if (v.includes('lmv') || v.includes('4-wheeler') || v.includes('4 wheeler') || v.includes('four') || v.includes('badge') || v.includes('psv') || v.includes('trans')) return 'LMV';
   return '';
 }
 
@@ -20095,7 +20109,7 @@ function populateFormFromStudentId(value) {
   if (student.address) setVal('fm-address', student.address);
   if (student.dob) setVal('fm-dob', student.dob);
   if (student.enrolled) setVal('fm-enrollDate', student.enrolled);
-  if (student.agentName || student.guardianName) setVal('fm-guardianName', student.agentName || student.guardianName);
+  if (student.fatherName || student.agentName || student.guardianName) setVal('fm-guardianName', student.fatherName || student.agentName || student.guardianName);
   if (student.llNumber) setVal('fm-llNumber', student.llNumber);
   if (student.llValidity) setVal('fm-llValidity', student.llValidity);
   if (student.dlNumber) setVal('fm-dlNumber', student.dlNumber);
@@ -20155,6 +20169,10 @@ function populateFormFromStudentId(value) {
         <label>Address</label>
         <textarea id="fm-address" rows="2" placeholder="Candidate address"></textarea>
       </div>
+      <div class="form-group full">
+        <label>Father's / Husband's Name (Son/Wife/Daughter of)</label>
+        <input type="text" id="fm-guardianName" placeholder="Father's, husband's, or guardian's name">
+      </div>
     </div>
 
     <!-- Form 5 specific fields -->
@@ -20184,10 +20202,6 @@ function populateFormFromStudentId(value) {
     <div id="form14-fields" style="display:none;">
       <div style="font-size:12px;font-weight:600;color:#7c3aed;margin:14px 0 10px;">📝 Form 14 Details</div>
       <div class="form-grid">
-        <div class="form-group">
-          <label>Son / Wife / Daughter of</label>
-          <input type="text" id="fm-guardianName" placeholder="Guardian / parent name">
-        </div>
         <div class="form-group">
           <label>Date of Birth</label>
           <input type="date" id="fm-dob">
