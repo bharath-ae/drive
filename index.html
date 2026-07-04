@@ -13816,6 +13816,7 @@ function renderVehicles() {
             <button class="btn btn-sm btn-primary" onclick="scheduleMaintenance('${(vehicle.firebaseId||vehicle.id||'').replace(/'/g, "\\'")}')" style="flex: 1;">
               🔧 Service
             </button>
+            ${currentRole === 'owner' ? `<button class="btn btn-sm btn-danger" onclick="confirmDeleteVehicle('${(vehicle.firebaseId||vehicle.id||'').replace(/'/g, "\\'")}', '${(vehicle.name||'').replace(/'/g, "\\'")}')" title="Delete vehicle">🗑</button>` : ''}
           </div>
         </div>
       `).join('')}
@@ -13902,6 +13903,7 @@ function openAddVehicleModal() {
 }
 
 async function saveNewVehicle() {
+  if (window.__savingVehicle) return; // guard against double-click / double-submit creating duplicate entries
   const name = document.getElementById('veh-name').value.trim();
   const reg = document.getElementById('veh-reg').value.trim().toUpperCase();
   if (!name || !reg) { alert('Vehicle name and registration are required'); return; }
@@ -13922,24 +13924,24 @@ async function saveNewVehicle() {
     createdAt: new Date().toISOString()
   };
 
+  window.__savingVehicle = true;
+  const saveBtn = document.querySelector('#modal-add-vehicle button[onclick="saveNewVehicle()"]');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.dataset.origText = saveBtn.textContent; saveBtn.textContent = 'Saving…'; }
+
   try {
     if (currentSchoolId && db) {
-      const vehicleSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/vehicles', null, {
-        ...vehicleData,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
-      vehicleData.id = 'veh-' + Date.now();
-      vehicleData.firebaseId = vehicleData.id;
+      // Write directly and capture the REAL Firestore-generated document ID.
+      // (Previously a fake local ID was used here, which meant delete/edit
+      // could never reliably find the actual saved document.)
+      const docRef = await db.collection('schools').doc(currentSchoolId).collection('vehicles').add(vehicleData);
+      vehicleData.id = docRef.id;
+      vehicleData.firebaseId = docRef.id;
       FGCache.invalidate(currentSchoolId, 'vehicles');
       EnhancedCache.del(currentSchoolId, 'vehicles').catch(e => {});
-      
-      if (vehicleSuccess) {
-        addNotification('✅ Vehicle ' + name + ' synced to Firebase', 'success');
-      } else {
-        addNotification('⏳ Vehicle queued for sync', 'info');
-      }
+      addNotification('✅ Vehicle ' + name + ' synced to Firebase', 'success');
     } else {
       vehicleData.id = 'local_' + Date.now();
+      vehicleData.firebaseId = vehicleData.id;
     }
     data.vehicles.push(vehicleData);
     closeModal('modal-add-vehicle');
@@ -13951,30 +13953,65 @@ async function saveNewVehicle() {
   } catch (err) {
     console.error('Error adding vehicle:', err);
     alert('Error saving vehicle. Please try again.');
+  } finally {
+    window.__savingVehicle = false;
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = saveBtn.dataset.origText || '✓ Add Vehicle'; }
   }
 }
 
 function viewVehicleDetails(vehicleId) {
-  const vehicle = data.vehicles.find(v => v.id === vehicleId);
+  const vehicle = data.vehicles.find(v => v.id === vehicleId || v.firebaseId === vehicleId);
   if (!vehicle) return;
 
   alert(`Vehicle Details:\n\nName: ${vehicle.name}\nRegistration: ${vehicle.reg}\nType: ${vehicle.type}\nSchool: ${vehicle.school}\nStatus: ${vehicle.status}\nInstructor: ${vehicle.instructor}\nLast Maintenance: ${new Date(vehicle.lastMaintenance).toLocaleDateString('en-IN')}\nFuel Level: ${vehicle.fuelLevel}%`);
 }
 
 function scheduleMaintenance(vehicleId) {
-  const vehicle = data.vehicles.find(v => v.id === vehicleId);
+  const vehicle = data.vehicles.find(v => v.id === vehicleId || v.firebaseId === vehicleId);
   if (!vehicle) return;
 
   const confirmed = confirm(`Schedule maintenance for ${vehicle.name} (${vehicle.reg})?`);
   if (confirmed) {
-    // In a real app, this would open a modal or form
     const newDate = new Date();
     newDate.setDate(newDate.getDate() + 7); // Schedule for next week
     vehicle.lastMaintenance = newDate.toISOString().split('T')[0];
     vehicle.status = 'maintenance';
-    
+
     renderVehicles();
     addNotification(`Maintenance scheduled for ${vehicle.name}`, 'success');
+
+    // Persist the change so it isn't lost on next reload
+    const sid = vehicle.firebaseId || vehicle.id;
+    if (currentSchoolId && typeof db !== 'undefined' && sid && !String(sid).startsWith('local_')) {
+      db.collection('schools').doc(currentSchoolId).collection('vehicles').doc(String(sid))
+        .update({ lastMaintenance: vehicle.lastMaintenance, status: vehicle.status })
+        .then(() => { FGCache.invalidate(currentSchoolId, 'vehicles'); EnhancedCache.del(currentSchoolId, 'vehicles').catch(e => {}); })
+        .catch(e => console.warn('Could not persist maintenance schedule:', e.message));
+    }
+  }
+}
+
+function confirmDeleteVehicle(vehicleId, vehicleName) {
+  if (currentRole !== 'owner') { showToast('⚠ Only owners can delete vehicles'); return; }
+  if (!confirm('Delete vehicle "' + (vehicleName || '') + '"? This cannot be undone.')) return;
+  deleteVehicle(vehicleId);
+}
+
+async function deleteVehicle(vehicleId) {
+  const vehicle = data.vehicles.find(v => v.id === vehicleId || v.firebaseId === vehicleId);
+  const sid = (vehicle && (vehicle.firebaseId || vehicle.id)) || vehicleId;
+  try {
+    if (currentSchoolId && typeof db !== 'undefined' && sid && !String(sid).startsWith('local_')) {
+      await db.collection('schools').doc(currentSchoolId).collection('vehicles').doc(String(sid)).delete();
+      FGCache.invalidate(currentSchoolId, 'vehicles');
+      EnhancedCache.del(currentSchoolId, 'vehicles').catch(e => {});
+    }
+    data.vehicles = data.vehicles.filter(v => v.id !== vehicleId && v.firebaseId !== vehicleId);
+    renderVehicles();
+    addNotification('Vehicle deleted', 'success');
+  } catch (e) {
+    console.error('Error deleting vehicle:', e);
+    alert('Error deleting vehicle. Please try again.');
   }
 }
 
@@ -15375,6 +15412,13 @@ function generateStudentInvoice(id) {
                   '</tfoot>' +
                 '</table>' +
               '</div>' +
+            '</td>' +
+          '</tr>' +
+          '<tr>' +
+            '<td colspan="3" style="padding:0 32px 24px;">' +
+              (pendingBox ? '<div style="padding:0 0 0 0;">' + pendingBox + '</div>' : '') +
+              '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.18em;color:#64748b;margin-bottom:10px;font-weight:700;">Payment History</div>' +
+              '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">' + instSection + '</div>' +
             '</td>' +
           '</tr>' +
           '<tr>' +
