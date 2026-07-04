@@ -874,6 +874,7 @@
         <div class="card">
           <div class="card-title">Transactions
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <input type="text" id="cf-search" placeholder="🔍 Search description, category, amount…" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:12px;min-width:220px;" oninput="renderCashflow()">
               <input type="month" id="cf-month-filter" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-family:'DM Sans';font-size:12px;" onchange="renderCashflow()">
               <button class="btn btn-outline btn-sm" onclick="printReport()">🖨 Report</button>
               <button class="btn btn-outline btn-sm" onclick="previewOrphanedFees()" style="color:#dc2626;border-color:#dc2626;" title="Find and delete fee records for deleted students">🧹 Clean Orphaned Fees</button>
@@ -10738,10 +10739,28 @@ async function renderCashflow() {
 
   const tb = document.getElementById('cf-table');
   if (tb) {
-    if (transactions.length === 0) {
-      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2);">No transactions yet. Add income or expense to get started.</td></tr>';
+    const searchTerm = (document.getElementById('cf-search')?.value || '').trim().toLowerCase();
+    const displayTransactions = searchTerm
+      ? transactions.filter(t => {
+          const amt = t.amount || 0;
+          const haystack = [
+            t.date || '',
+            t.category || '',
+            t.desc || '',
+            t.type || '',
+            t.paymentMode || '',
+            String(amt)
+          ].join(' ').toLowerCase();
+          return haystack.includes(searchTerm);
+        })
+      : transactions;
+
+    if (displayTransactions.length === 0) {
+      tb.innerHTML = searchTerm
+        ? '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2);">No transactions match "' + searchTerm.replace(/</g,'&lt;') + '".</td></tr>'
+        : '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--text2);">No transactions yet. Add income or expense to get started.</td></tr>';
     } else {
-      tb.innerHTML = transactions.map(t => {
+      tb.innerHTML = displayTransactions.map(t => {
         const amt = t.amount || 0;
         const txId = String(t.id || t.firebaseId || '');
         const safeTxId = txId.replace(/'/g, "\\'");
