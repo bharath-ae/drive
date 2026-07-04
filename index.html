@@ -947,7 +947,14 @@
                 <option>Both 2W + 4W</option>
               </select>
             </div>
-            <div class="form-group"><label>Assign Instructor</label>
+            <div class="form-group"><label>Type</label>
+              <select id="s-enrollment-type" onchange="toggleEnrollmentTypeFields('s')">
+                <option>Both Training and DL</option>
+                <option>Only Training</option>
+                <option>Only DL</option>
+              </select>
+            </div>
+            <div class="form-group" id="s-instructor-wrap"><label>Assign Instructor</label>
               <select id="s-instructor"><option value="">Select Instructor</option></select>
             </div>
             <div class="form-group"><label>Assign Agent (optional)</label>
@@ -957,7 +964,7 @@
               </div>
               <datalist id="agent-list"></datalist>
             </div>
-            <div class="form-group"><label>Total Classes</label><input type="number" id="s-total-classes" placeholder="e.g. 27" value="27" min="1"></div>
+            <div class="form-group" id="s-classes-wrap"><label>Total Classes</label><input type="number" id="s-total-classes" placeholder="e.g. 27" value="27" min="1"></div>
             <div class="form-group"><label>Fee Amount (₹)</label><input type="number" id="s-fee" placeholder="Total fee"></div>
             <div class="form-group"><label>Fee Paid (₹)</label><input type="number" id="s-paid" placeholder="Amount paid"></div>
             <div class="form-group"><label>Enrollment Date</label><input type="date" id="s-enroll"></div>
@@ -1813,6 +1820,13 @@
         <div class="form-group"><label>Vehicle Type *</label>
           <select id="qs-vehicle" onchange="toggleDLFieldsVisibility('qs-vehicle','qs-dl-section')"><option>2-Wheeler (Gear)</option><option>2-Wheeler (Gearless)</option><option>4-Wheeler (LMV)</option><option>Both 2W + 4W</option><option>Heavy</option><option>LMV Badge</option><option>Trans Badge (PSV)</option></select>
         </div>
+        <div class="form-group"><label>Type</label>
+          <select id="qs-enrollment-type" onchange="toggleEnrollmentTypeFields('qs')">
+            <option>Both Training and DL</option>
+            <option>Only Training</option>
+            <option>Only DL</option>
+          </select>
+        </div>
         <!-- DL fields — shown only when Heavy / LMV Badge / Trans Badge selected -->
         <div class="form-group full" id="qs-dl-section" style="display:none;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px;">
           <div style="font-weight:600;font-size:13px;color:#92400e;margin-bottom:10px;">🪪 Driving Licence Required for this Vehicle Type</div>
@@ -1821,7 +1835,7 @@
             <div class="form-group"><label>DL Expiry Date *</label><input type="date" id="qs-dl-expiry"></div>
           </div>
         </div>
-        <div class="form-group"><label>Assign Instructor (optional)</label>
+        <div class="form-group" id="qs-instructor-wrap"><label>Assign Instructor (optional)</label>
           <select id="qs-instructor"><option value="">-- Select Instructor --</option></select>
         </div>
         <div class="form-group"><label>Assign Agent (optional)</label>
@@ -1836,7 +1850,7 @@
         </div>
         <div class="form-group"><label>Form 15 Start Date</label><input type="date" id="qs-form15-start"></div>
         <div class="form-group"><label>Form 15 End Date</label><input type="date" id="qs-form15-end"></div>
-        <div class="form-group"><label>Total Classes</label><input type="number" id="qs-total-classes" placeholder="e.g. 27" value="27" min="1"></div>
+        <div class="form-group" id="qs-classes-wrap"><label>Total Classes</label><input type="number" id="qs-total-classes" placeholder="e.g. 27" value="27" min="1"></div>
         <!-- Schedule during enrollment -->
         <div class="form-group full" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;margin-top:4px;">
           <div style="font-weight:600;font-size:13px;color:var(--primary);margin-bottom:10px;">📅 Class Schedule (optional — set up now)</div>
@@ -9094,6 +9108,7 @@ function openAddStudentModal() {
   };
   populateInstructorDropdown('qs-instructor');
   updateAgentDatalist();
+  toggleEnrollmentTypeFields('qs');
   openModal('modal-add-student');
 }
 
@@ -9120,6 +9135,18 @@ function toggleDLFieldsVisibility(vehicleSelectId, dlSectionId) {
   }
 }
 
+// Enrollment "Type": Only Training / Only DL / Both. When a client only needs
+// DL processing (no driving lessons at this school), the instructor and
+// class-count fields are irrelevant, so hide them.
+function toggleEnrollmentTypeFields(prefix) {
+  const type = document.getElementById(prefix + '-enrollment-type')?.value || 'Both Training and DL';
+  const onlyDL = type === 'Only DL';
+  const instructorWrap = document.getElementById(prefix + '-instructor-wrap');
+  const classesWrap = document.getElementById(prefix + '-classes-wrap');
+  if (instructorWrap) instructorWrap.style.display = onlyDL ? 'none' : '';
+  if (classesWrap) classesWrap.style.display = onlyDL ? 'none' : '';
+}
+
 async function addStudentFromModal() {
   if (!hasActionPermission('add_student')) {
     alert('You do not have permission to add students.');
@@ -9133,6 +9160,8 @@ async function addStudentFromModal() {
   const agentName = document.getElementById('qs-agent') ? document.getElementById('qs-agent').value.trim() : '';
   const studentId = document.getElementById('qs-student-id').value.trim();
   const totalClasses = parseInt(document.getElementById('qs-total-classes') && document.getElementById('qs-total-classes').value) || 27;
+  const enrollmentType = document.getElementById('qs-enrollment-type')?.value || 'Both Training and DL';
+  const isOnlyDL = enrollmentType === 'Only DL';
 
   // DL validation for vehicles that require it
   const selectedVehicle = document.getElementById('qs-vehicle').value;
@@ -9149,13 +9178,14 @@ async function addStudentFromModal() {
   }
   try {
     const qsInstEl = document.getElementById('qs-instructor');
-    const qsInstValue = qsInstEl ? qsInstEl.value : '';
-    const qsInstName = qsInstEl ? (qsInstEl.options[qsInstEl.selectedIndex] ? qsInstEl.options[qsInstEl.selectedIndex].text : qsInstValue) : '';
+    const qsInstValue = isOnlyDL ? '' : (qsInstEl ? qsInstEl.value : '');
+    const qsInstName = isOnlyDL ? '' : (qsInstEl ? (qsInstEl.options[qsInstEl.selectedIndex] ? qsInstEl.options[qsInstEl.selectedIndex].text : qsInstValue) : '');
     const enrolledDate = document.getElementById('qs-enrolled').value || new Date().toISOString().split('T')[0];
     const studentData = {
       name, phone,
       createdAt: new Date().toISOString(),
       vehicle: document.getElementById('qs-vehicle').value,
+      enrollmentType,
       agentName: agentName,
       agent: agentName,
       instructor: qsInstName || qsInstValue,
@@ -9165,7 +9195,7 @@ async function addStudentFromModal() {
       form15Start: document.getElementById('qs-form15-start')?.value||'',
       form15End: document.getElementById('qs-form15-end')?.value||'',
       classes: 0,
-      totalClasses,
+      totalClasses: isOnlyDL ? 0 : totalClasses,
       totalFee: parseInt(document.getElementById('qs-fee').value)||0,
       paid: amountPaid,
       installments: amountPaid > 0 ? [{ date: enrolledDate, amount: amountPaid, mode: paymentMode, note: 'Initial payment' }] : [],
@@ -9272,9 +9302,11 @@ async function enrollStudent() {
   try {
     const paidAmt = parseInt(document.getElementById('s-paid').value)||0;
     const agentName = document.getElementById('s-agent') ? document.getElementById('s-agent').value.trim() : '';
+    const enrollmentType = document.getElementById('s-enrollment-type')?.value || 'Both Training and DL';
+    const isOnlyDL = enrollmentType === 'Only DL';
     const sInstEl = document.getElementById('s-instructor');
-    const sInstValue = sInstEl ? sInstEl.value : '';
-    const sInstName = sInstEl ? (sInstEl.options[sInstEl.selectedIndex] ? sInstEl.options[sInstEl.selectedIndex].text : sInstValue) : '';
+    const sInstValue = isOnlyDL ? '' : (sInstEl ? sInstEl.value : '');
+    const sInstName = isOnlyDL ? '' : (sInstEl ? (sInstEl.options[sInstEl.selectedIndex] ? sInstEl.options[sInstEl.selectedIndex].text : sInstValue) : '');
     const studentData = {
       name, phone,
       createdAt: new Date().toISOString(),
@@ -9282,11 +9314,12 @@ async function enrollStudent() {
       agent: agentName,
       email: document.getElementById('s-email').value,
       vehicle: document.getElementById('s-vehicle').value,
+      enrollmentType,
       instructor: sInstName || sInstValue,
       instructorEmail: sInstValue || '',
       instructorName: sInstName || '',
       classes: 0,
-      totalClasses: parseInt(document.getElementById('s-total-classes') && document.getElementById('s-total-classes').value) || 27,
+      totalClasses: isOnlyDL ? 0 : (parseInt(document.getElementById('s-total-classes') && document.getElementById('s-total-classes').value) || 27),
       totalFee: parseInt(document.getElementById('s-fee').value)||0,
       paid: paidAmt,
       fcmToken: document.getElementById('s-fcm-token') ? document.getElementById('s-fcm-token').value.trim() : '',
@@ -9340,9 +9373,11 @@ async function enrollStudent() {
 }
 
 function clearEnrollForm() {
-  ['s-name','s-dob','s-phone','s-email','s-fcm-token','s-address','s-aadhaar','s-fee','s-paid','s-enroll','s-emergency','s-agent'].forEach(id => {
+  ['s-name','s-dob','s-father-name','s-phone','s-email','s-fcm-token','s-address','s-aadhaar','s-fee','s-paid','s-enroll','s-emergency','s-agent'].forEach(id => {
     const el = document.getElementById(id); if(el) el.value='';
   });
+  const typeSel = document.getElementById('s-enrollment-type'); if (typeSel) typeSel.value = 'Both Training and DL';
+  toggleEnrollmentTypeFields('s');
 }
 
 // ============================================================
@@ -14941,7 +14976,12 @@ function openEditStudentModal(s) {
             <div class="form-group"><label>DL Expiry Date</label><input type="date" id="edit-s-dl-expiry" value="${s.dlExpiry||''}"></div>
           </div>
         </div>
-        <div class="form-group"><label>Instructor</label>
+        <div class="form-group"><label>Type</label>
+          <select id="edit-s-enrollment-type" onchange="toggleEnrollmentTypeFields('edit-s')">
+            ${['Both Training and DL','Only Training','Only DL'].map(v=>`<option ${((s.enrollmentType||'Both Training and DL')===v)?'selected':''}>${v}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group" id="edit-s-instructor-wrap"><label>Instructor</label>
           <select id="edit-s-instructor">
             <option value="">-- No Instructor --</option>
           </select>
@@ -14949,7 +14989,7 @@ function openEditStudentModal(s) {
         <div class="form-group"><label>Class Time</label><input type="time" id="edit-s-classtime" value="${s.classTime||''}"></div>
         <div class="form-group"><label>Form 15 Start Date</label><input type="date" id="edit-s-form15-start" value="${s.form15Start||''}"></div>
         <div class="form-group"><label>Form 15 End Date</label><input type="date" id="edit-s-form15-end" value="${s.form15End||''}"></div>
-        <div class="form-group"><label>Total Classes</label><input type="number" id="edit-s-total-classes" value="${s.totalClasses||27}"></div>
+        <div class="form-group" id="edit-s-classes-wrap"><label>Total Classes</label><input type="number" id="edit-s-total-classes" value="${s.totalClasses||27}"></div>
         <div class="form-group"><label>Classes Done</label><input type="number" id="edit-s-classes" value="${s.classes||0}"></div>
         <div class="form-group"><label>Total Fee (₹)</label><input type="number" id="edit-s-fee" value="${s.totalFee||0}"></div>
         <div class="form-group"><label>Amount Paid (₹)</label><input type="number" id="edit-s-paid" value="${s.paid||0}"></div>
@@ -14983,6 +15023,7 @@ function openEditStudentModal(s) {
   document.body.appendChild(modal);
   // Populate instructor dropdown after modal is in DOM
   populateEditInstructorDropdown(s);
+  toggleEnrollmentTypeFields('edit-s');
 }
 
 function populateEditInstructorDropdown(s) {
@@ -15049,8 +15090,10 @@ async function saveEditStudent(studentId) {
   const phone = document.getElementById('edit-s-phone')?.value.trim();
   if (!name || !phone) { alert('Name and phone are required'); return; }
   const instSel = document.getElementById('edit-s-instructor');
-  const instEmail = instSel?.value || '';
-  const instName = instSel ? (instSel.options[instSel.selectedIndex]?.text || '') : '';
+  const enrollmentType = document.getElementById('edit-s-enrollment-type')?.value || 'Both Training and DL';
+  const isOnlyDL = enrollmentType === 'Only DL';
+  const instEmail = isOnlyDL ? '' : (instSel?.value || '');
+  const instName = isOnlyDL ? '' : (instSel ? (instSel.options[instSel.selectedIndex]?.text || '') : '');
   const updates = {
     name, phone,
     dob: document.getElementById('edit-s-dob')?.value||'',
@@ -15061,12 +15104,13 @@ async function saveEditStudent(studentId) {
     blood: document.getElementById('edit-s-blood')?.value||'',
     gender: document.getElementById('edit-s-gender')?.value||'',
     vehicle: document.getElementById('edit-s-vehicle')?.value||'',
+    enrollmentType,
     instructorEmail: instEmail,
     instructor: instName,
     classTime: document.getElementById('edit-s-classtime')?.value||'',
     form15Start: document.getElementById('edit-s-form15-start')?.value||'',
     form15End: document.getElementById('edit-s-form15-end')?.value||'',
-    totalClasses: parseInt(document.getElementById('edit-s-total-classes')?.value)||27,
+    totalClasses: isOnlyDL ? 0 : (parseInt(document.getElementById('edit-s-total-classes')?.value)||27),
     classes: parseInt(document.getElementById('edit-s-classes')?.value)||0,
     totalFee: parseInt(document.getElementById('edit-s-fee')?.value)||0,
     paid: parseInt(document.getElementById('edit-s-paid')?.value)||0,
