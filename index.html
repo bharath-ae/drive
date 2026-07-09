@@ -8798,6 +8798,7 @@ function switchToOverallView() {
 // ============================================================
 // DASHBOARD
 // ============================================================
+
 function renderDashboard() {
   // Auto-select school for admins/staff if not already set
   if (!currentSchoolId && userSchools.length > 0) {
@@ -8822,6 +8823,120 @@ function renderDashboard() {
     return;
   }
   
+    // ================= INSTRUCTOR SPECIFIC DASHBOARD =================
+  // Requirement: show only total number of students allocated to them and pending balance
+  // + currently available (active) students
+  if (currentRole === 'instructor') {
+    const today = new Date().toISOString().split('T')[0];
+    const instructorName = (typeof getCurrentInstructorName === 'function' ? getCurrentInstructorName() : '') || '';
+    const userEmail = (currentUser && currentUser.email ? currentUser.email.toLowerCase().trim() : '');
+    const instructorNameLow = instructorName.toLowerCase().trim();
+
+    const schoolStudents = data.students.filter(s => !currentSchoolId || s.schoolId === currentSchoolId);
+
+    const allocatedStudents = schoolStudents.filter(function(s){
+      const sEmail = (s.instructorEmail || s.instructor || '').toString().toLowerCase().trim();
+      const sName  = (s.instructor || s.instructorName || '').toString().toLowerCase().trim();
+      const sName2 = (s.instructorName || '').toString().toLowerCase().trim();
+      if (userEmail && sEmail === userEmail) return true;
+      if (userEmail && sEmail.includes(userEmail)) return true;
+      if (instructorNameLow && (sName === instructorNameLow || sName2 === instructorNameLow)) return true;
+      if (instructorNameLow && (sName.includes(instructorNameLow) || sName2.includes(instructorNameLow))) return true;
+      return false;
+    });
+
+    const activeAllocated = allocatedStudents.filter(function(s){ return s.status !== 'Completed'; });
+    const currentlyAvailable = activeAllocated.filter(function(s){ return s.status === 'Active'; });
+
+    const totalAllocated = allocatedStudents.length;
+    const totalActive = currentlyAvailable.length;
+    const totalPending = allocatedStudents.reduce(function(sum, s){
+      const totalFee = parseFloat(s.totalFee || s.fee || s.courseFee || 0) || 0;
+      const paid = parseFloat(s.paid || s.amountPaid || s.feePaid || 0) || 0;
+      const pending = Math.max(0, totalFee - paid);
+      return sum + pending;
+    }, 0);
+
+    // Hide owner-specific dashboard sections for instructor
+    const incomeSection = document.getElementById('income-analytics-section');
+    if (incomeSection) incomeSection.style.display = 'none';
+
+    const dashPage = document.getElementById('page-dashboard');
+    if (dashPage) {
+      dashPage.querySelectorAll('.two-col').forEach(function(el){ el.style.display = 'none'; });
+      const recentCard = document.getElementById('recent-tx');
+      if (recentCard) {
+        const card = recentCard.closest('.card');
+        if (card && !card.closest('.two-col')) card.style.display = 'none';
+      }
+      const chartEl = document.getElementById('dash-chart');
+      if (chartEl) {
+        const card = chartEl.closest('.card');
+        if (card && !card.closest('.two-col')) card.style.display = 'none';
+      }
+    }
+
+    const statsGrid = document.getElementById('dashboard-stats-grid');
+    if (statsGrid) {
+      statsGrid.style.display = 'grid';
+      statsGrid.innerHTML = 
+        '<div class="stat-card accent"><div class="sc-label">My Students (Total)</div><div class="sc-value" style="color:var(--primary)">' + totalAllocated + '</div><div class="sc-sub">All allocated to you</div></div>' +
+        '<div class="stat-card blue"><div class="sc-label">Currently Available</div><div class="sc-value" style="color:var(--accent2)">' + totalActive + '</div><div class="sc-sub">Active / not completed</div></div>' +
+        '<div class="stat-card red"><div class="sc-label">Pending Balance</div><div class="sc-value" style="color:var(--danger)">₹' + totalPending.toLocaleString('en-IN') + '</div><div class="sc-sub">From ' + totalAllocated + ' allocated students</div></div>';
+    }
+
+    // Show currently available students list below stats
+    const existingList = document.getElementById('instructor-current-students-list');
+    if (existingList) existingList.remove();
+    const listContainer = document.createElement('div');
+    listContainer.id = 'instructor-current-students-list';
+    listContainer.className = 'card';
+    listContainer.style.marginTop = '18px';
+    if (currentlyAvailable.length === 0) {
+      listContainer.innerHTML = '<div class="card-title">Currently Available Students <span class="badge badge-gray">0</span></div><div style="text-align:center;padding:30px;color:var(--text2);">No active students currently allocated to you.</div>';
+    } else {
+      const rows = currentlyAvailable.map(function(s){
+        const totalFee = parseFloat(s.totalFee||0)||0;
+        const paid = parseFloat(s.paid||0)||0;
+        const bal = Math.max(0, totalFee-paid);
+        const sid = s.firebaseId||s.id||'';
+        return '<tr>' +
+          '<td>' + (s.studentId||'') + '</td>' +
+          '<td><div style="font-weight:500">' + (s.name||'Unknown') + '</div><div style="font-size:11px;color:var(--text2)">' + (s.phone||'') + '</div></td>' +
+          '<td><span class="badge badge-blue">' + (s.vehicle||'—') + '</span></td>' +
+          '<td>' + (s.classes||0) + '/' + (s.totalClasses||27) + '</td>' +
+          '<td style="font-weight:600;color:' + (bal>0?'var(--danger)':'var(--success)') + '">₹' + bal.toLocaleString() + '</td>' +
+          '<td><span class="badge badge-green">' + (s.status||'Active') + '</span></td>' +
+          '<td><button class="btn btn-outline btn-sm" onclick="viewStudent(\'' + sid + '\')">View</button></td>' +
+        '</tr>';
+      }).join('');
+      listContainer.innerHTML = 
+        '<div class="card-title">Currently Available Students <span class="badge badge-blue">' + currentlyAvailable.length + ' Active</span></div>' +
+        '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>ID</th><th>Name</th><th>Vehicle</th><th>Classes</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+    if (statsGrid && statsGrid.parentNode) {
+      statsGrid.parentNode.insertBefore(listContainer, statsGrid.nextSibling);
+    }
+
+    const dateEl = document.getElementById('dash-date');
+    if (dateEl) dateEl.textContent = new Date().toLocaleDateString('en-IN',{weekday:'short',year:'numeric',month:'short',day:'numeric'});
+
+    return;
+  }
+  // ================= END INSTRUCTOR DASHBOARD =================
+
+
+  // For owner/office - restore hidden sections (in case previously hidden by instructor view)
+  const incomeSectionRestore = document.getElementById('income-analytics-section');
+  if (incomeSectionRestore) incomeSectionRestore.style.display = '';
+  const dashPageRestore = document.getElementById('page-dashboard');
+  if (dashPageRestore) {
+    dashPageRestore.querySelectorAll('.two-col').forEach(function(el){ el.style.display = ''; });
+    dashPageRestore.querySelectorAll('.card').forEach(function(el){ el.style.display = ''; });
+  }
+  const statsGridRestore = document.getElementById('dashboard-stats-grid');
+  if (statsGridRestore) statsGridRestore.style.display = '';
+
   // Get current school info
   const currentSchool = userSchools.find(s => s.id === currentSchoolId);
   const schoolName = currentSchool ? currentSchool.name : 'Selected School';
@@ -8902,7 +9017,7 @@ function renderDashboard() {
     {label:'DL Tests Scheduled',value:pendingDLTests,sub:'Upcoming tests', color:'', class:''},
     {label:'Instructors',value:totalInstructors,sub:'Total instructors', color:'', class:''}
   ];
-  statsGrid = document.getElementById('dashboard-stats-grid');
+  let statsGrid = document.getElementById('dashboard-stats-grid');
   if(statsGrid) statsGrid.innerHTML = stats.map(s=>`
     <div class="stat-card ${s.class}">
       <div class="sc-label">${s.label}</div>
@@ -8912,10 +9027,10 @@ function renderDashboard() {
   `).join('');
   
   // Render income analytics
-  setTimeout(renderIncomeAnalytics, 100);
+  setTimeout(function(){ if(typeof renderIncomeAnalytics==='function') renderIncomeAnalytics(); }, 100);
 
   // Recent transactions for this school
-  recent = document.getElementById('recent-tx');
+  let recent = document.getElementById('recent-tx');
   if(recent) {
     if (schoolTransactions.length === 0) {
       recent.innerHTML = '<tr><td colspan="3" style="text-align:center;padding:40px;color:var(--text2);">No transactions yet for ' + schoolName + '</td></tr>';
@@ -8932,6 +9047,8 @@ function renderDashboard() {
     }
   }
 }
+
+
 
 // ============================================================
 // STUDENTS
@@ -13247,6 +13364,15 @@ function getCurrentInstructorRecord() {
 function canPickOtherStudents() {
   if (currentRole === 'owner' || currentRole === 'office') return true;
   if (currentRole !== 'instructor') return false;
+  const email = (currentUser && currentUser.email ? currentUser.email : '').toLowerCase().trim();
+  // Direct lookup in staff collection (most reliable)
+  if (email) {
+    const staffMatch = (data.staff||[]).find(function(s){ return (s.email||'').toLowerCase().trim() === email; });
+    if (staffMatch && staffMatch.permissions && staffMatch.permissions.otherStudents) return true;
+    const adminMatch = (data.admins||[]).find(function(a){ return (a.email||'').toLowerCase().trim() === email; });
+    if (adminMatch && adminMatch.permissions && adminMatch.permissions.otherStudents) return true;
+  }
+  // Fallback via name matching
   const rec = getCurrentInstructorRecord();
   return !!(rec && rec.permissions && rec.permissions.otherStudents);
 }
@@ -15550,6 +15676,9 @@ function renderOtherServices() {
         const col = status==='approved' ? 'background:#dcfce7;color:#15803d' : status==='submitted' ? 'background:#dbeafe;color:#1d4ed8' : 'background:#fef3c7;color:#b45309';
         return '<span style="font-size:10px;padding:2px 5px;border-radius:4px;' + col + ';margin-right:2px;">' + label + ': ' + status + '</span>';
       };
+      const safeId = (svc.firebaseId||svc.id||'').toString().replace(/'/g, "\\'");
+      const safeId2 = (svc.id||svc.firebaseId||'').toString().replace(/'/g, "\\'");
+      const safeName = (svc.clientName||'').toString().replace(/'/g, "\\'").replace(/"/g, '&quot;');
       return '<tr>' +
         '<td><div style="font-weight:500">' + (svc.clientName||'—') + '</div>' +
           '<div style="font-size:11px;color:var(--text2)">' + (svc.clientPhone||'') + '</div>' +
@@ -15563,10 +15692,10 @@ function renderOtherServices() {
         '<td style="color:' + balColor + ';font-weight:600;">\u20b9' + Math.abs(bal).toLocaleString() + '</td>' +
         '<td><span class="badge ' + badgeCls + '">' + badgeLabel + '</span></td>' +
         '<td><div style="display:flex;gap:4px;">' +
-          '<button class="btn btn-outline btn-sm" onclick="viewOtherService(\'' + svc.id + '\')">View</button>' +
-          (currentRole === 'owner' ? '<button class="btn btn-outline btn-sm" onclick="openEditOtherService(\'' + (svc.firebaseId||svc.id) + '\')">&#9998; Edit</button>' : '') +
-          '<button class="btn btn-primary btn-sm" onclick="generateServiceInvoice(\'' + svc.id + '\')">\ud83e\uddfe</button>' +
-          (currentRole === 'owner' ? '<button class="btn btn-danger btn-sm" style="padding:4px 8px;" title="Delete" onclick="confirmDeleteOtherService(\\\'' + (svc.firebaseId||svc.id) + '\\\')">&#128465;</button>' : '') +
+          '<button class="btn btn-outline btn-sm" onclick="viewOtherService(\'' + safeId2 + '\')">View</button>' +
+          (currentRole === 'owner' ? '<button class="btn btn-outline btn-sm" onclick="openEditOtherService(\'' + safeId + '\')">&#9998; Edit</button>' : '') +
+          '<button class="btn btn-primary btn-sm" onclick="generateServiceInvoice(\'' + safeId2 + '\')">\ud83e\uddfe</button>' +
+          (currentRole === 'owner' ? '<button class="btn btn-danger btn-sm" style="padding:4px 8px;" title="Delete" onclick="confirmDeleteOtherService(\'' + safeId + '\', \'' + safeName + '\')">&#128465;</button>' : '') +
         '</div></td></tr>';
     }).join('');
     tableHtml = '<table class="data-table"><thead><tr><th>Client</th><th>Address</th><th>Service</th><th>Forms</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead><tbody>' + rows + '</tbody></table>';
@@ -15593,7 +15722,9 @@ function renderOtherServices() {
     '</div>';
 }
 
-async function confirmDeleteOtherService(id, clientName) {
+
+
+function confirmDeleteOtherService(id, clientName) {
   if (currentRole !== 'owner') { showToast('⚠ Only owners can delete service records'); return; }
   const existing = document.getElementById('modal-confirm-delete-svc');
   if (existing) existing.remove();
@@ -15601,18 +15732,20 @@ async function confirmDeleteOtherService(id, clientName) {
   modal.className = 'modal-overlay';
   modal.id = 'modal-confirm-delete-svc';
   modal.style.display = 'flex';
+  const safeId = String(id||'').replace(/'/g, "\\'");
+  const safeName = String(clientName||'this client').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/</g,'&lt;');
   modal.innerHTML =
     '<div class="modal" style="width:420px;max-width:96vw;">' +
-      '<div class="modal-header"><h3>🗑 Delete Service Record</h3>' +
-        '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">✕</button>' +
+      '<div class="modal-header"><h3>\uD83D\uDDD1 Delete Service Record</h3>' +
+        '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">\u2715</button>' +
       '</div>' +
       '<div style="padding:20px;">' +
         '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin-bottom:18px;">' +
-          '<strong style="color:#dc2626;">Delete "' + (clientName || 'this client') + '"?</strong>' +
+          '<strong style="color:#dc2626;">Delete "' + safeName + '"?</strong>' +
           '<div style="font-size:12px;color:#6b7280;margin-top:6px;">This will permanently delete the service record and all associated payment history. This action cannot be undone.</div>' +
         '</div>' +
         '<div style="display:flex;gap:10px;">' +
-          '<button class="btn btn-danger" onclick="deleteOtherService(' + String(id) + ')" style="flex:1;">🗑 Yes, Delete</button>' +
+          '<button class="btn btn-danger" onclick="deleteOtherService(\'' + safeId + '\')" style="flex:1;">\uD83D\uDDD1 Yes, Delete</button>' +
           '<button class="btn btn-outline" onclick="this.closest(\'.modal-overlay\').remove()" style="flex:1;">Cancel</button>' +
         '</div>' +
       '</div>' +
@@ -15621,27 +15754,39 @@ async function confirmDeleteOtherService(id, clientName) {
   document.body.appendChild(modal);
 }
 
+
+
 async function deleteOtherService(id) {
   if (currentRole !== 'owner') { showToast('⚠ Only owners can delete service records'); return; }
   const sid = String(id);
   try {
-    // Delete from Firestore
+    const deletePromises = [];
     if (typeof db !== 'undefined' && currentSchoolId) {
-      await db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(sid).delete();
+      try {
+        deletePromises.push(db.collection('schools').doc(currentSchoolId).collection('otherServices').doc(sid).delete());
+      } catch(e){ console.warn('Subcollection delete failed', e.message); }
+      try {
+        deletePromises.push(db.collection('otherServices').doc(sid).delete());
+      } catch(e){ console.warn('Top-level delete failed', e.message); }
     }
-    // Remove from local data
+    await Promise.allSettled(deletePromises);
+
+    try { if (typeof FGCache !== 'undefined') FGCache.invalidate(currentSchoolId, 'otherServices'); } catch(_e){}
+    try { if (typeof EnhancedCache !== 'undefined') EnhancedCache.del(currentSchoolId, 'otherServices').catch(function(){}); } catch(_e){}
+
     data.otherServices = (data.otherServices || []).filter(function(s){ return String(s.firebaseId||s.id) !== sid; });
-    // Close confirm modal
-    document.getElementById('modal-confirm-delete-svc')?.remove();
-    // Refresh page
+    var confirmModal = document.getElementById('modal-confirm-delete-svc');
+    if (confirmModal) confirmModal.remove();
     renderOtherServices();
     showToast('🗑 Service record deleted');
-    addNotification('Other service record deleted', 'warning');
+    if (typeof addNotification === 'function') addNotification('Other service record deleted', 'warning');
   } catch(e) {
     console.error('Delete other service error:', e);
     alert('Error deleting service record: ' + (e.message || 'Please try again.'));
   }
 }
+
+
 
 function openAddAgentModal() {
   const old = document.getElementById('modal-add-agent');
@@ -20455,5 +20600,5 @@ function populateFormFromStudentId(value) {
   </div>
 </div>
 
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1524a8dd9a5d86d',t:'MTc4MzA0Mzk3MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1551e1d6920b277',t:'MTc4MzA3MzYwNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1524a8dd9a5d86d',t:'MTc4MzA0Mzk3MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1551e1d6920b277',t:'MTc4MzA3MzYwNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a187bb8199bf6e76',t:'MTc4MzYwNDM0Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
