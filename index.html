@@ -5835,10 +5835,11 @@ async function loadInitialData() {
     // ALSO load own staff record so permission checks (otherStudents) work for instructor
     if (currentRole === 'instructor') {
       const userEmail = (typeof currentUser !== 'undefined' && currentUser && currentUser.email) ? currentUser.email : '';
+      const userId = (typeof currentUser !== 'undefined' && currentUser && currentUser.uid) ? currentUser.uid : '';
       const [fuel, ownStaff, ownUserDoc] = await Promise.allSettled([
         FirebaseService.getDocuments(FirebaseService.fuelRef, 'createdAt','desc','fuel', FGCache.TTL_SHORT),
-        userEmail ? FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('staff').where('email','==', userEmail), 'createdAt','desc','staff', FGCache.TTL_SHORT) : Promise.resolve([]),
-        userEmail ? FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('users').where('email','==', userEmail), 'addedAt','desc','admins', FGCache.TTL_SHORT) : Promise.resolve([])
+        userId ? db.collection('schools').doc(sid).collection('staff').doc(userId).get().then(function(doc){ return doc.exists ? [{ id: doc.id, firebaseId: doc.id, ...doc.data() }] : []; }).catch(function(){ return []; }) : Promise.resolve([]),
+        userId ? db.collection('schools').doc(sid).collection('users').doc(userId).get().then(function(doc){ return doc.exists ? [{ id: doc.id, firebaseId: doc.id, ...doc.data() }] : []; }).catch(function(){ return []; }) : Promise.resolve([])
       ]);
       if (fuel.status === 'fulfilled' && fuel.value) data.fuel = mergeSchoolData(data.fuel, fuel.value, sid);
       if (ownStaff.status === 'fulfilled' && ownStaff.value && ownStaff.value.length) {
@@ -14709,40 +14710,66 @@ async function deleteStudent(id) {
 // ============================================================
 // OTHER STUDENTS PAGE (instructor sees all school students)
 // ============================================================
-function renderOtherStudentsPage() {
+function renderOtherStudentsPage(filterQuery) {
   const page = document.getElementById('page-other-students');
   if (!page) return;
 
-  // If instructor permission seems missing, try to reload own staff record once (handles case where staff wasn't loaded at login)
+  // If instructor permission seems missing, try to reload own staff record once
   if (!canPickOtherStudents() && currentRole === 'instructor' && currentUser && currentUser.email && typeof db !== 'undefined' && currentSchoolId) {
     const ownEmail = currentUser.email;
+    const ownUid = currentUser.uid || '';
     const alreadyTried = window._otherStudentsPermRetry && window._otherStudentsPermRetry[ownEmail];
     if (!alreadyTried) {
       window._otherStudentsPermRetry = window._otherStudentsPermRetry || {};
       window._otherStudentsPermRetry[ownEmail] = true;
-      page.innerHTML = '<div class="page-header"><div><h2>&#x1F465; Other Students</h2></div></div><div style="text-align:center;padding:60px;color:var(--text2);"><div style="font-size:32px;margin-bottom:12px;">&#x23F3;</div><div>Checking permissions...<br>Reloading your staff record.</div></div>';
-      db.collection('schools').doc(currentSchoolId).collection('staff').where('email','==', ownEmail).get().then(function(snap){
-        if (!snap.empty) {
-          const docs = snap.docs.map(function(d){ return { id: d.id, firebaseId: d.id, schoolId: currentSchoolId, ...d.data() }; });
-          // merge into data.staff
-          const others = (data.staff||[]).filter(function(s){ return (s.email||'').toLowerCase() !== ownEmail.toLowerCase(); });
-          data.staff = others.concat(docs);
+      window._otherStudentsPermRetry[ownUid] = true;
+      page.innerHTML = '<div class="page-header"><div><h2>&#x1F465; Other Students</h2></div></div><div style="text-align:center;padding:60px;color:var(--text2);"><div style="font-size:32px;margin-bottom:12px;">&#x23F3;</div><div>Checking permissions for ' + ownEmail + '...<br>Reloading your staff record (ID: ' + ownUid.slice(0,6) + '...).</div><div style="margin-top:12px;font-size:12px;color:#64748b;">If this keeps showing, ask owner to re-save your staff record and ensure your email matches.</div></div>';
+      const tryDirectDoc = ownUid ? db.collection('schools').doc(currentSchoolId).collection('staff').doc(ownUid).get().then(function(doc){
+        if (doc.exists) {
+          const dataDoc = { id: doc.id, firebaseId: doc.id, schoolId: currentSchoolId, ...doc.data() };
+          const others = (data.staff||[]).filter(function(s){ return (s.firebaseId||s.id) !== ownUid; });
+          data.staff = others.concat([dataDoc]);
+          console.log('Reloaded staff via direct doc(uid):', dataDoc);
           try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
-          // retry render
-          renderOtherStudentsPage();
-        } else {
-          // also try users collection
-          db.collection('schools').doc(currentSchoolId).collection('users').where('email','==', ownEmail).get().then(function(snap2){
-            if (!snap2.empty) {
-              const docs2 = snap2.docs.map(function(d){ return { id: d.id, firebaseId: d.id, schoolId: currentSchoolId, ...d.data() }; });
-              const others2 = (data.admins||[]).filter(function(a){ return (a.email||'').toLowerCase() !== ownEmail.toLowerCase(); });
-              data.admins = others2.concat(docs2);
-              try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
-              renderOtherStudentsPage();
-            }
-          });
+          setTimeout(function(){ renderOtherStudentsPage(); }, 200);
+          return true;
         }
-      }).catch(function(e){ console.warn('Perm reload failed', e.message); });
+        return false;
+      }).catch(function(e){ console.warn('Direct staff doc read failed', e.message); return false; }) : Promise.resolve(false);
+
+      tryDirectDoc.then(function(found){
+        if (found) return;
+        return db.collection('schools').doc(currentSchoolId).collection('staff').where('email','==', ownEmail).get().then(function(snap){
+          if (!snap.empty) {
+            const docs = snap.docs.map(function(d){ return { id: d.id, firebaseId: d.id, schoolId: currentSchoolId, ...d.data() }; });
+            const others = (data.staff||[]).filter(function(s){ return (s.email||'').toLowerCase() !== ownEmail.toLowerCase(); });
+            data.staff = others.concat(docs);
+            console.log('Reloaded staff via email query:', docs.length);
+            try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
+            renderOtherStudentsPage();
+          } else {
+            return db.collection('schools').doc(currentSchoolId).collection('users').doc(ownUid).get().then(function(doc){
+              if (doc.exists) {
+                const dataDoc = { id: doc.id, firebaseId: doc.id, schoolId: currentSchoolId, ...doc.data() };
+                const others = (data.admins||[]).filter(function(a){ return (a.firebaseId||a.id) !== ownUid; });
+                data.admins = others.concat([dataDoc]);
+                try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
+                renderOtherStudentsPage();
+              } else {
+                return db.collection('schools').doc(currentSchoolId).collection('users').where('email','==', ownEmail).get().then(function(snap2){
+                  if (!snap2.empty) {
+                    const docs2 = snap2.docs.map(function(d){ return { id: d.id, firebaseId: d.id, schoolId: currentSchoolId, ...d.data() }; });
+                    const others2 = (data.admins||[]).filter(function(a){ return (a.email||'').toLowerCase() !== ownEmail.toLowerCase(); });
+                    data.admins = others2.concat(docs2);
+                    try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
+                    renderOtherStudentsPage();
+                  }
+                });
+              }
+            });
+          }
+        });
+      }).catch(function(e){ console.warn('Perm reload chain failed', e.message); });
       return;
     }
   }
@@ -14754,16 +14781,35 @@ function renderOtherStudentsPage() {
     return;
   }
 
-  // All active non-completed students in the school NOT assigned to this instructor
   const myEmail = (typeof currentUser !== 'undefined' && currentUser ? currentUser.email : '').toLowerCase();
   const myName  = (typeof getCurrentInstructorName === 'function' ? getCurrentInstructorName() : '').toLowerCase();
   const allActiveSessions = getAllActiveSessions();
 
+  // Get all active students
   const allSchoolStudents = (data.students||[]).filter(function(s) {
     if (currentSchoolId && s.schoolId !== currentSchoolId) return false;
     if (s.status === 'Completed') return false;
     return true;
   });
+
+  // Store for search filtering
+  window._otherStudentsAllCache = allSchoolStudents;
+
+  // Apply search filter if provided
+  let filteredStudents = allSchoolStudents;
+  const query = (filterQuery || document.getElementById('other-students-search')?.value || '').toString().toLowerCase().trim();
+  if (query) {
+    filteredStudents = allSchoolStudents.filter(function(s){
+      return (s.name||'').toLowerCase().includes(query) ||
+             (s.phone||'').toLowerCase().includes(query) ||
+             (s.vehicle||'').toLowerCase().includes(query) ||
+             (s.instructor||'').toLowerCase().includes(query) ||
+             (s.instructorName||'').toLowerCase().includes(query) ||
+             (s.studentId||'').toLowerCase().includes(query) ||
+             (s.enrollmentNo||'').toLowerCase().includes(query) ||
+             (s.applicationNo||'').toLowerCase().includes(query);
+    });
+  }
 
   if (allSchoolStudents.length === 0) {
     page.innerHTML =
@@ -14789,7 +14835,7 @@ function renderOtherStudentsPage() {
       }).join('') +
     '</div>' : '';
 
-  const cards = allSchoolStudents.map(function(s) {
+  const cards = filteredStudents.map(function(s) {
     const classes = s.classes || 0;
     const total = s.totalClasses || 27;
     const pct = Math.min(100, Math.round(classes/total*100));
@@ -14816,6 +14862,7 @@ function renderOtherStudentsPage() {
         '</div>' +
         (isMyStudent ? '<span class="badge badge-green" style="font-size:10px;">Mine</span>' : '<span class="badge badge-gray" style="font-size:10px;">' + assignedInstructor + '</span>') +
       '</div>' +
+      '<div style="font-size:12px;color:var(--text2);margin-bottom:4px;">ID: ' + (s.studentId||s.enrollmentNo||'') + ' ' + (s.applicationNo?'| App: '+s.applicationNo:'') + '</div>' +
       '<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">&#x1F697; ' + (s.vehicle||'—') + '</div>' +
       '<div style="margin-bottom:10px;">' +
         '<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;"><span>Progress</span><span style="font-weight:600;">' + classes + '/' + total + '</span></div>' +
@@ -14825,15 +14872,33 @@ function renderOtherStudentsPage() {
     '</div>';
   }).join('');
 
+  const noResultHtml = filteredStudents.length === 0 && query ? '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text2);"><div style="font-size:32px;margin-bottom:8px;">🔍</div><div>No students found for "' + query + '"</div><div style="font-size:12px;margin-top:4px;">Try searching by name, phone, vehicle, instructor, enrollment or application number</div></div>' : '';
+
   page.innerHTML =
     '<div class="page-header">' +
       '<div><h2>&#x1F465; Other Students</h2><p>Give training to any student in this school</p></div>' +
-      '<div style="font-size:13px;color:var(--text2);align-self:center;">' + allSchoolStudents.length + ' active students</div>' +
+      '<div style="font-size:13px;color:var(--text2);align-self:center;">' + filteredStudents.length + ' of ' + allSchoolStudents.length + ' students</div>' +
     '</div>' +
     activeSessionBanner +
-    '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#92400e;">&#x1F4A1; Click <strong>Give Training</strong> on any student to start a timed class session. You can run multiple sessions at once.</div>' +
-    '<div class="two-col">' + cards + '</div>';
+    '<div class="card" style="padding:12px 16px;margin-bottom:16px;">' +
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">' +
+        '<div style="flex:1;min-width:240px;position:relative;">' +
+          '<input id="other-students-search" type="text" placeholder="🔍 Search by name, phone, vehicle, instructor, enrollment no, application no..." value="' + query.replace(/"/g,'&quot;') + '" style="width:100%;padding:10px 14px 10px 36px;border:1px solid var(--border);border-radius:8px;font-family:DM Sans;font-size:13px;" oninput="filterOtherStudentsInstructor(this.value)">' +
+          '<span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text2);">🔍</span>' +
+        '</div>' +
+        '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'other-students-search\').value=\'\';filterOtherStudentsInstructor(\'\')">✕ Clear</button>' +
+      '</div>' +
+    '</div>' +
+    '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#92400e;">💡 Click <strong>Give Training</strong> on any student to start a timed class session. You can run multiple sessions at once.</div>' +
+    '<div class="two-col">' + (cards || noResultHtml) + '</div>';
 }
+
+function filterOtherStudentsInstructor(query) {
+  // Re-render with filter - uses cached all students
+  renderOtherStudentsPage(query);
+}
+
+
 
 // ============================================================
 // CLASS TIMER (Other Student Training) — Multi-Session
@@ -21503,5 +21568,5 @@ function populateFormFromStudentId(value) {
 })();
 </script>
 
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a18c91a32e7595be',t:'MTc4MzY1NTA1NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</body>
 </html>
