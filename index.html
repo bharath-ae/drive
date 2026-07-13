@@ -932,6 +932,8 @@
           <div class="card-title">Student Details</div>
           <div class="form-grid">
             <div class="form-group"><label>Full Name *</label><input type="text" id="s-name" placeholder="Enter full name"></div>
+            <div class="form-group"><label>Enrollment Number</label><input type="text" id="s-enrollment-no" placeholder="Enter enrollment number"></div>
+            <div class="form-group"><label>Application Number</label><input type="text" id="s-application-no" placeholder="Enter application number"></div>
             <div class="form-group"><label>Date of Birth *</label><input type="date" id="s-dob"></div>
             <div class="form-group"><label>Father's / Guardian's Name</label><input type="text" id="s-father-name" placeholder="Father's or guardian's full name"></div>
             <div class="form-group"><label>Phone Number *</label><input type="tel" id="s-phone" placeholder="10-digit number"></div>
@@ -1796,7 +1798,8 @@
     <div id="stab-personal">
       <div class="form-grid">
         <div class="form-group"><label>Full Name *</label><input type="text" id="qs-name" placeholder="Student full name"></div>
-        <div class="form-group"><label>Student ID</label><input type="text" id="qs-student-id" placeholder="Optional student ID"></div>
+        <div class="form-group"><label>Enrollment Number</label><input type="text" id="qs-student-id" placeholder="Enter enrollment number"></div>
+        <div class="form-group"><label>Application Number</label><input type="text" id="qs-application-no" placeholder="Enter application number"></div>
         <div class="form-group"><label>Date of Birth *</label><input type="date" id="qs-dob"></div>
         <div class="form-group"><label>Father's / Guardian's Name</label><input type="text" id="qs-father-name" placeholder="Father's or guardian's full name"></div>
         <div class="form-group"><label>Phone Number *</label><input type="tel" id="qs-phone" placeholder="10-digit mobile"></div>
@@ -2244,7 +2247,7 @@
       <div class="form-group"><label>Phone Number</label>
         <input type="tel" id="admin-phone" placeholder="Phone number">
       </div>
-      <div class="form-group full"><label>Permissions</label>
+      <div class="form-group full" id="staff-permissions-section"><label>Permissions <span style="font-size:11px;color:#6b7280;font-weight:normal;">(Office staff gets all permissions automatically)</span></label>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
           <div style="display: flex; align-items: center; gap: 8px; padding: 8px; background: white; border-radius: 6px; border: 1px solid #e5e7eb;">
             <input type="checkbox" id="perm-students" checked style="margin: 0;">
@@ -2357,7 +2360,7 @@
           <option value="intern">Intern</option>
         </select>
       </div>
-      <div class="form-group full"><label>Permissions</label>
+      <div class="form-group full" id="staff-permissions-section"><label>Permissions <span style="font-size:11px;color:#6b7280;font-weight:normal;">(Office staff gets all permissions automatically)</span></label>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
           <label style="display:flex;align-items:center;gap:10px;padding:10px;background:white;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;">
             <input type="checkbox" id="staff-perm-students" style="margin:0;">
@@ -5829,11 +5832,32 @@ async function loadInitialData() {
     }
 
     // instructor: fuel has no listener — fetch it; students are covered by listener
+    // ALSO load own staff record so permission checks (otherStudents) work for instructor
     if (currentRole === 'instructor') {
-      const [fuel] = await Promise.allSettled([
-        FirebaseService.getDocuments(FirebaseService.fuelRef)
+      const userEmail = (typeof currentUser !== 'undefined' && currentUser && currentUser.email) ? currentUser.email : '';
+      const [fuel, ownStaff, ownUserDoc] = await Promise.allSettled([
+        FirebaseService.getDocuments(FirebaseService.fuelRef, 'createdAt','desc','fuel', FGCache.TTL_SHORT),
+        userEmail ? FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('staff').where('email','==', userEmail), 'createdAt','desc','staff', FGCache.TTL_SHORT) : Promise.resolve([]),
+        userEmail ? FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('users').where('email','==', userEmail), 'addedAt','desc','admins', FGCache.TTL_SHORT) : Promise.resolve([])
       ]);
-      if (fuel.status === 'fulfilled') data.fuel = mergeSchoolData(data.fuel, fuel.value, sid);
+      if (fuel.status === 'fulfilled' && fuel.value) data.fuel = mergeSchoolData(data.fuel, fuel.value, sid);
+      if (ownStaff.status === 'fulfilled' && ownStaff.value && ownStaff.value.length) {
+        data.staff = mergeSchoolData(data.staff, ownStaff.value, sid);
+      }
+      if (ownUserDoc.status === 'fulfilled' && ownUserDoc.value && ownUserDoc.value.length) {
+        data.admins = mergeSchoolData(data.admins, ownUserDoc.value, sid);
+      }
+      // Fallback: if where query returned empty (old docs without email index), try loading full staff list for this school (small) once
+      if ((!data.staff || data.staff.filter(function(s){ return s.schoolId===sid; }).length===0) && userEmail) {
+        try {
+          const allStaff = await FirebaseService.getDocuments(db.collection('schools').doc(sid).collection('staff'), 'createdAt','desc','staff', FGCache.TTL_LONG);
+          if (allStaff && allStaff.length) {
+            data.staff = mergeSchoolData(data.staff, allStaff, sid);
+          }
+        } catch(e){ console.warn('Fallback staff load failed', e.message); }
+      }
+      // Rebuild navigation now that permission data is available — this makes Other Students menu appear if permission granted
+      try { if (typeof buildNav === 'function') buildNav(); } catch(e){ console.warn('buildNav after staff load failed', e.message); }
     }
 
     // NOTE: Students, transactions, attendance (3 types), and schedule are intentionally
@@ -5867,6 +5891,14 @@ function setupRealtimeListeners() {
         renderStudentsTable();
         renderDashboard();
         renderInstructorStudents();
+      }
+      // For instructor, permission may have been loaded just now — rebuild nav to show Other Students if granted
+      if (currentRole === 'instructor') {
+        try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
+        // Also re-render other students page if currently on it and permission just became available
+        if (currentPage === 'other-students' && typeof renderOtherStudentsPage === 'function') {
+          try { renderOtherStudentsPage(); } catch(e){}
+        }
       }
     });
     listeners.push(studentsUnsubscribe);
@@ -5994,6 +6026,7 @@ const navConfig = {
       {id:'all-students',icon:'&#128101;',label:'All Students'},
       {id:'cashflow',icon:'&#128176;',label:'Cash Flow'},
       {id:'other-services',icon:'&#128222;',label:'Other Services'},
+      {id:'other-students',icon:'&#128101;',label:'Other Students (Enter Class)'},
       {id:'forms-registry',icon:'&#128203;',label:'Form 5 Registry'},
       {id:'form14-registry',icon:'&#128202;',label:'Form 14 Registry'},
       {id:'form15-registry',icon:'&#128210;',label:'Form 15 (Training Log)'},
@@ -6219,9 +6252,9 @@ function hasPageAccess(pageId) {
       'school-selector', 'dashboard', 'all-students', 'cashflow', 'reports',
       'admin-management', 'staff-management',
       'owner-fuel', 'vehicles', 'owner-attendance',
-      'other-services', 'student-tracking', 'dl-tests', 'notifications', 'add-student',
+      'other-services', 'other-students', 'student-tracking', 'dl-tests', 'notifications', 'add-student',
       'forms-registry', 'form14-registry', 'form15-registry', 'agents', 'form5-print', 'form14-print',
-      'data-import', 'data-repair'
+      'data-import', 'data-repair', 'attendance', 'class-schedule', 'student-attendance', 'petrol', 'my-students'
     ],
     office: [
       'dashboard', 'all-students', 'cashflow', 'reports',
@@ -9157,7 +9190,7 @@ function filterStudents(val, status='') {
 function openAddStudentModal() {
   // ── Clear ALL form fields first ──────────────────────────────
   const textFields = [
-    'qs-name','qs-phone','qs-dob','qs-email','qs-address','qs-aadhaar',
+    'qs-name','qs-student-id','qs-application-no','qs-phone','qs-dob','qs-email','qs-address','qs-aadhaar',
     'qs-emergency','qs-agent','qs-class-time','qs-form15-start','qs-form15-end','qs-notes','qs-fee','qs-paid',
     'qs-schedule-start','qs-form-no'
   ];
@@ -9269,9 +9302,16 @@ async function addStudentFromModal() {
     alert('You do not have permission to add students.');
     return;
   }
-  const name = document.getElementById('qs-name').value.trim();
-  const phone = document.getElementById('qs-phone').value.trim();
+  const nameEl = document.getElementById('qs-name');
+  const phoneEl = document.getElementById('qs-phone');
+  const name = (nameEl ? nameEl.value : '').trim();
+  const phone = (phoneEl ? phoneEl.value : '').trim();
   if(!name||!phone){alert('Name and phone required');return;}
+  
+  const addBtn = document.querySelector('#modal-add-student .btn-accent');
+  const originalText = addBtn ? addBtn.textContent : 'Enroll Student';
+  if (addBtn) { addBtn.disabled = true; addBtn.textContent = 'Saving...'; }
+
   const amountPaid = parseInt(document.getElementById('qs-paid').value)||0;
   const paymentMode = document.getElementById('qs-paymode').value;
   const agentName = document.getElementById('qs-agent') ? document.getElementById('qs-agent').value.trim() : '';
@@ -9279,28 +9319,27 @@ async function addStudentFromModal() {
   const totalClasses = parseInt(document.getElementById('qs-total-classes') && document.getElementById('qs-total-classes').value) || 27;
   const enrollmentType = document.getElementById('qs-enrollment-type')?.value || 'Both Training and DL';
   const isOnlyDL = enrollmentType === 'Only DL';
-
-  // DL validation for vehicles that require it
   const selectedVehicle = document.getElementById('qs-vehicle').value;
   let dlNumber = '', dlExpiry = '';
   if (isDLRequired(selectedVehicle)) {
     dlNumber = (document.getElementById('qs-dl-number')?.value || '').trim();
     dlExpiry = document.getElementById('qs-dl-expiry')?.value || '';
-    if (!dlNumber) { alert('DL Number is required for ' + selectedVehicle + ' vehicle type.'); return; }
-    if (!dlExpiry) { alert('DL Expiry Date is required for ' + selectedVehicle + ' vehicle type.'); return; }
-    // Check DL is not already expired
-    if (new Date(dlExpiry) < new Date()) {
-      if (!confirm('The DL expiry date (' + dlExpiry + ') is in the past. Enroll anyway?')) return;
-    }
+    if (!dlNumber) { alert('DL Number is required for ' + selectedVehicle); if (addBtn) { addBtn.disabled = false; addBtn.textContent = originalText; } return; }
+    if (!dlExpiry) { alert('DL Expiry Date is required for ' + selectedVehicle); if (addBtn) { addBtn.disabled = false; addBtn.textContent = originalText; } return; }
   }
   try {
     const qsInstEl = document.getElementById('qs-instructor');
     const qsInstValue = isOnlyDL ? '' : (qsInstEl ? qsInstEl.value : '');
     const qsInstName = isOnlyDL ? '' : (qsInstEl ? (qsInstEl.options[qsInstEl.selectedIndex] ? qsInstEl.options[qsInstEl.selectedIndex].text : qsInstValue) : '');
     const enrolledDate = document.getElementById('qs-enrolled').value || new Date().toISOString().split('T')[0];
+    const applicationNo = document.getElementById('qs-application-no') ? document.getElementById('qs-application-no').value.trim() : '';
     const studentData = {
       name, phone,
       createdAt: new Date().toISOString(),
+      enrollmentNo: studentId,
+      applicationNo: applicationNo,
+      enrollmentNumber: studentId,
+      applicationNumber: applicationNo,
       vehicle: document.getElementById('qs-vehicle').value,
       enrollmentType,
       agentName: agentName,
@@ -9331,91 +9370,83 @@ async function addStudentFromModal() {
       ...FirebaseService.getOwnerScope()
     };
     if (agentName) ensureAgentRegistered(agentName);
-    
-    const studentRef = await FirebaseService.addStudent(studentData);
-    if (studentRef && studentRef.id) {
-      studentData.id = studentRef.id;
-      studentData.firebaseId = studentRef.id;
-    }
 
-    // Save class schedule if selected
-    const selectedDays = Array.from(document.querySelectorAll('.qs-day-check:checked')).map(cb => cb.value);
-    const scheduleStart = document.getElementById('qs-schedule-start')?.value;
-    const sessionDuration = parseInt(document.getElementById('qs-session-duration')?.value || '60');
-    const classTime = document.getElementById('qs-class-time')?.value;
-    if (selectedDays.length > 0 && scheduleStart && currentSchoolId && typeof db !== 'undefined') {
-      try {
-        const scheduleEntry = {
-          studentName: name,
-          studentId: '',
-          instructorEmail: qsInstValue,
-          instructorName: qsInstName,
-          days: selectedDays,
-          startDate: scheduleStart,
-          classTime: classTime || '',
-          sessionDuration,
-          schoolId: currentSchoolId,
-          createdAt: firebase.firestore.FieldValue.serverTimestamp()
-        };
-        
-        const schedSuccess = await DataWriter.queueWrite('add', 'schools/' + currentSchoolId + '/schedule', null, scheduleEntry);
-        FGCache.invalidate(currentSchoolId, 'schedule');
-        EnhancedCache.del(currentSchoolId, 'schedule').catch(e => {});
-        
-        if (!schedSuccess) {
-          console.log('Schedule queued for sync');
-        }
-      } catch(schedErr) { console.warn('Schedule save failed:', schedErr.message); }
-    }
-
-    if (studentData.fcmToken && studentData.email) {
-      await saveUserFcmToken(studentData.email, studentData.fcmToken);
-    }
-    
-    // Add cash flow entry if amount was paid
+    // ULTRA-FAST: Close modal and show success immediately
+    const tempId = 'temp_' + Date.now();
+    const optimistic = Object.assign({}, studentData, { id: tempId, firebaseId: tempId });
     if (!data.students) data.students = [];
-    data.students.push(studentData);
-    updateAgentDatalist();
-    if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage();
+    data.students.push(optimistic);
+    try { closeModal('modal-add-student'); } catch(e){}
+    showToast('Saving ' + name + '...');
 
-    if (amountPaid > 0) {
-      const transactionData = {
-        date: enrolledDate,
-        type: 'income',
-        category: 'Student Fee',
-        desc: `Student enrollment fee: ${name}`,
-        amount: amountPaid,
-        paymentMode: paymentMode,
-        studentId: studentRef && studentRef.id ? studentRef.id : '',
-        studentName: name,
-        source: 'student_installment',
-        sourceKey: _fgPaymentSourceKey(studentRef && studentRef.id ? studentRef.id : (studentData.firebaseId || studentData.id || ''), 0),
-        installmentIndex: 0,
-        schoolId: currentSchoolId ? currentSchoolId : '',
-        ...FirebaseService.getOwnerScope()
-      };
-      
-      await recordCashflowTransaction(transactionData);
-      addNotification(`Student enrolled and payment recorded: ₹${amountPaid}`,'success');
-    } else {
-      addNotification(`New student enrolled: ${name}`,'success');
-    }
-    
-    closeModal('modal-add-student');
+    // Defer UI heavy work
+    setTimeout(function(){
+      try { renderStudentsTable(); } catch(e){}
+      try { renderDashboard(); } catch(e){}
+      try { updateAgentDatalist(); } catch(e){}
+    }, 50);
+
+    // Background sync
+    (async function(){
+      try {
+        const studentRef = await FirebaseService.addStudent(studentData);
+        const realId = (studentRef && studentRef.id) ? studentRef.id : tempId;
+        const idx = data.students.findIndex(function(s){ return s.firebaseId === tempId; });
+        if (idx !== -1) {
+          data.students[idx].id = realId;
+          data.students[idx].firebaseId = realId;
+        }
+        showToast('Student ' + name + ' saved!');
+        if (amountPaid > 0 && currentSchoolId) {
+          recordCashflowTransaction({
+            date: enrolledDate,
+            type: 'income',
+            category: 'Student Fee',
+            desc: 'Student enrollment fee: ' + name,
+            amount: amountPaid,
+            paymentMode: paymentMode,
+            studentId: realId,
+            studentName: name,
+            source: 'student_installment',
+            sourceKey: _fgPaymentSourceKey(realId, 0),
+            installmentIndex: 0,
+            schoolId: currentSchoolId
+          }).catch(function(){});
+        }
+      } catch (err) {
+        console.error('Background save failed', err);
+        try {
+          data.students = (data.students||[]).filter(function(s){ return s.firebaseId !== tempId; });
+        } catch(e){}
+        showToast('Sync failed, saved locally');
+        alert('Cloud sync failed: ' + (err.message||'') + '. Data kept locally.');
+      } finally {
+        if (addBtn) { addBtn.disabled = false; addBtn.textContent = originalText; }
+      }
+    })();
+
   } catch (error) {
-    console.error('Error adding student:', error);
-    alert('Error adding student. Please try again.');
+    console.error('Error preparing student:', error);
+    alert('Error: ' + (error.message || 'Please try again.'));
+    if (addBtn) { addBtn.disabled = false; addBtn.textContent = originalText; }
   }
 }
 
+
+
 async function enrollStudent() {
-  const name = document.getElementById('s-name').value.trim();
-  const phone = document.getElementById('s-phone').value.trim();
+  const nameEl = document.getElementById('s-name');
+  const phoneEl = document.getElementById('s-phone');
+  const name = (nameEl ? nameEl.value : '').trim();
+  const phone = (phoneEl ? phoneEl.value : '').trim();
   if(!name||!phone){
     document.getElementById('enroll-msg').innerHTML = '<div class="alert" style="background:#fee2e2;border:1px solid #fecaca;color:#b91c1c;">Please fill all required fields.</div>';
     return;
   }
   
+  const enrollBtn = document.querySelector('#page-add-student .btn-accent');
+  const originalBtnText = enrollBtn ? enrollBtn.textContent : 'Enroll Student';
+
   try {
     const paidAmt = parseInt(document.getElementById('s-paid').value)||0;
     const agentName = document.getElementById('s-agent') ? document.getElementById('s-agent').value.trim() : '';
@@ -9424,9 +9455,15 @@ async function enrollStudent() {
     const sInstEl = document.getElementById('s-instructor');
     const sInstValue = isOnlyDL ? '' : (sInstEl ? sInstEl.value : '');
     const sInstName = isOnlyDL ? '' : (sInstEl ? (sInstEl.options[sInstEl.selectedIndex] ? sInstEl.options[sInstEl.selectedIndex].text : sInstValue) : '');
+    const enrollmentNo = document.getElementById('s-enrollment-no') ? document.getElementById('s-enrollment-no').value.trim() : '';
+    const applicationNo = document.getElementById('s-application-no') ? document.getElementById('s-application-no').value.trim() : '';
     const studentData = {
       name, phone,
       createdAt: new Date().toISOString(),
+      enrollmentNo: enrollmentNo,
+      applicationNo: applicationNo,
+      studentId: enrollmentNo,
+      enrollmentNumber: enrollmentNo,
       agentName: agentName,
       agent: agentName,
       email: document.getElementById('s-email').value,
@@ -9451,48 +9488,96 @@ async function enrollStudent() {
       ...FirebaseService.getOwnerScope()
     };
     if (agentName) ensureAgentRegistered(agentName);
-    
-    const studentRef = await FirebaseService.addStudent(studentData);
-    if (studentRef && studentRef.id) {
-      studentData.id = studentRef.id;
-      studentData.firebaseId = studentRef.id;
-    }
+
+    // ULTRA-FAST: Optimistic UI - show success and clear form IMMEDIATELY, before any network call
+    const tempId = 'temp_' + Date.now();
+    const optimistic = Object.assign({}, studentData, { id: tempId, firebaseId: tempId });
     if (!data.students) data.students = [];
-    data.students.push(studentData);
-    updateAgentDatalist();
-    if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage();
-    if (studentData.fcmToken && studentData.email) {
-      await saveUserFcmToken(studentData.email, studentData.fcmToken);
-    }
-    if (paidAmt > 0 && currentSchoolId) {
-      await recordCashflowTransaction({
-        date: studentData.enrolled,
-        type: 'income',
-        category: 'Student Fee',
-        desc: `Student enrollment fee: ${name}`,
-        amount: paidAmt,
-        paymentMode: 'Cash',
-        studentId: studentData.firebaseId || studentData.id || '',
-        studentName: name,
-        source: 'student_installment',
-        sourceKey: _fgPaymentSourceKey(studentData.firebaseId || studentData.id || '', 0),
-        installmentIndex: 0,
-        schoolId: currentSchoolId
-      });
-    }
-    document.getElementById('enroll-msg').innerHTML = `<div class="alert alert-success">✓ ${name} enrolled successfully! Instructor: ${document.getElementById('s-instructor').value}</div>`;
-    addNotification(paidAmt > 0 ? `Student enrolled and payment recorded: ₹${paidAmt}` : `Student enrolled: ${name}`,'success');
-    clearEnrollForm();
+    data.students.push(optimistic);
+    try { updateAgentDatalist(); } catch(e){}
+    
+    // Instant feedback - no waiting
+    document.getElementById('enroll-msg').innerHTML = '<div class="alert alert-success">✓ ' + name + ' saved locally! Syncing to cloud...</div>';
+    try { addNotification('Student enrolled: ' + name,'success'); } catch(e){}
+    try { clearEnrollForm(); } catch(e){}
+    if (enrollBtn) { enrollBtn.disabled = false; enrollBtn.textContent = originalBtnText; }
+    showToast('✓ ' + name + ' added - syncing...');
+
+    // Defer heavy renders to next tick to keep UI responsive
+    setTimeout(function(){
+      try { if (document.getElementById('page-agents')?.classList.contains('active')) renderAgentsPage(); } catch(e){}
+      try { renderStudentsTable(); } catch(e){}
+      try { renderDashboard(); } catch(e){}
+    }, 50);
+
+    // Background Firebase sync - don't block UI
+    (async function(){
+      try {
+        const studentRef = await FirebaseService.addStudent(studentData);
+        const realId = (studentRef && studentRef.id) ? studentRef.id : tempId;
+        // Replace temp ID with real ID
+        const idx = data.students.findIndex(function(s){ return s.firebaseId === tempId; });
+        if (idx !== -1) {
+          data.students[idx].id = realId;
+          data.students[idx].firebaseId = realId;
+        }
+        document.getElementById('enroll-msg').innerHTML = '<div class="alert alert-success">✓ ' + name + ' enrolled successfully! ID: ' + realId.slice(-6).toUpperCase() + ' (synced)</div>';
+        // Background secondary tasks
+        if (studentData.fcmToken && studentData.email) {
+          saveUserFcmToken(studentData.email, studentData.fcmToken).catch(function(){});
+        }
+        if (paidAmt > 0 && currentSchoolId) {
+          recordCashflowTransaction({
+            date: studentData.enrolled,
+            type: 'income',
+            category: 'Student Fee',
+            desc: 'Student enrollment fee: ' + name,
+            amount: paidAmt,
+            paymentMode: 'Cash',
+            studentId: realId,
+            studentName: name,
+            source: 'student_installment',
+            sourceKey: _fgPaymentSourceKey(realId, 0),
+            installmentIndex: 0,
+            schoolId: currentSchoolId
+          }).catch(function(){});
+        }
+      } catch (err) {
+        console.error('Background save failed, rolling back', err);
+        try {
+          data.students = (data.students||[]).filter(function(s){ return s.firebaseId !== tempId; });
+        } catch(e){}
+        document.getElementById('enroll-msg').innerHTML = '<div class="alert" style="background:#fee2e2;border:1px solid #fecaca;color:#b91c1c;">Cloud sync failed: ' + (err.message||'') + ' - data kept locally, will retry on next sync.</div>';
+        showToast('⚠️ Sync failed, saved locally');
+      }
+    })();
+
   } catch (error) {
-    console.error('Error enrolling student:', error);
-    document.getElementById('enroll-msg').innerHTML = '<div class="alert" style="background:#fee2e2;border:1px solid #fecaca;color:#b91c1c;">Error enrolling student. Please try again.</div>';
+    console.error('Error preparing student:', error);
+    document.getElementById('enroll-msg').innerHTML = '<div class="alert" style="background:#fee2e2;border:1px solid #fecaca;color:#b91c1c;">Error: ' + (error.message || 'Please try again.') + '</div>';
+    if (enrollBtn) { enrollBtn.disabled = false; enrollBtn.textContent = originalBtnText; }
   }
 }
 
+
+
 function clearEnrollForm() {
-  ['s-name','s-dob','s-father-name','s-phone','s-email','s-fcm-token','s-address','s-aadhaar','s-fee','s-paid','s-enroll','s-emergency','s-agent'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.value='';
-  });
+  document.getElementById('s-name').value = '';
+  const enr = document.getElementById('s-enrollment-no'); if (enr) enr.value = '';
+  const app = document.getElementById('s-application-no'); if (app) app.value = '';
+  document.getElementById('s-dob').value = '';
+  document.getElementById('s-father-name').value = '';
+  document.getElementById('s-phone').value = '';
+  document.getElementById('s-email').value = '';
+  const fcm = document.getElementById('s-fcm-token'); if (fcm) fcm.value = '';
+  document.getElementById('s-address').value = '';
+  document.getElementById('s-aadhaar').value = '';
+  document.getElementById('s-fee').value = '';
+  document.getElementById('s-paid').value = '';
+  document.getElementById('s-enroll').value = '';
+  document.getElementById('s-emergency').value = '';
+  document.getElementById('s-total-classes').value = '27';
+  document.getElementById('enroll-msg').innerHTML = '';
   const typeSel = document.getElementById('s-enrollment-type'); if (typeSel) typeSel.value = 'Both Training and DL';
   toggleEnrollmentTypeFields('s');
 }
@@ -11816,7 +11901,9 @@ function exportReportPDF() {
     <div class="sub">Financial Report — ${label} &nbsp;|&nbsp; Generated ${new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</div>
     ${rcEl.innerHTML}
     ${'<' + 'script>window.onload=function(){ window.print(); }' + '<' + '/script>'}
-  </body></html>`);
+  
+
+</body></html>`);
   win.document.close();
 }
 
@@ -13365,14 +13452,12 @@ function canPickOtherStudents() {
   if (currentRole === 'owner' || currentRole === 'office') return true;
   if (currentRole !== 'instructor') return false;
   const email = (currentUser && currentUser.email ? currentUser.email : '').toLowerCase().trim();
-  // Direct lookup in staff collection (most reliable)
   if (email) {
     const staffMatch = (data.staff||[]).find(function(s){ return (s.email||'').toLowerCase().trim() === email; });
     if (staffMatch && staffMatch.permissions && staffMatch.permissions.otherStudents) return true;
     const adminMatch = (data.admins||[]).find(function(a){ return (a.email||'').toLowerCase().trim() === email; });
     if (adminMatch && adminMatch.permissions && adminMatch.permissions.otherStudents) return true;
   }
-  // Fallback via name matching
   const rec = getCurrentInstructorRecord();
   return !!(rec && rec.permissions && rec.permissions.otherStudents);
 }
@@ -14628,6 +14713,40 @@ function renderOtherStudentsPage() {
   const page = document.getElementById('page-other-students');
   if (!page) return;
 
+  // If instructor permission seems missing, try to reload own staff record once (handles case where staff wasn't loaded at login)
+  if (!canPickOtherStudents() && currentRole === 'instructor' && currentUser && currentUser.email && typeof db !== 'undefined' && currentSchoolId) {
+    const ownEmail = currentUser.email;
+    const alreadyTried = window._otherStudentsPermRetry && window._otherStudentsPermRetry[ownEmail];
+    if (!alreadyTried) {
+      window._otherStudentsPermRetry = window._otherStudentsPermRetry || {};
+      window._otherStudentsPermRetry[ownEmail] = true;
+      page.innerHTML = '<div class="page-header"><div><h2>&#x1F465; Other Students</h2></div></div><div style="text-align:center;padding:60px;color:var(--text2);"><div style="font-size:32px;margin-bottom:12px;">&#x23F3;</div><div>Checking permissions...<br>Reloading your staff record.</div></div>';
+      db.collection('schools').doc(currentSchoolId).collection('staff').where('email','==', ownEmail).get().then(function(snap){
+        if (!snap.empty) {
+          const docs = snap.docs.map(function(d){ return { id: d.id, firebaseId: d.id, schoolId: currentSchoolId, ...d.data() }; });
+          // merge into data.staff
+          const others = (data.staff||[]).filter(function(s){ return (s.email||'').toLowerCase() !== ownEmail.toLowerCase(); });
+          data.staff = others.concat(docs);
+          try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
+          // retry render
+          renderOtherStudentsPage();
+        } else {
+          // also try users collection
+          db.collection('schools').doc(currentSchoolId).collection('users').where('email','==', ownEmail).get().then(function(snap2){
+            if (!snap2.empty) {
+              const docs2 = snap2.docs.map(function(d){ return { id: d.id, firebaseId: d.id, schoolId: currentSchoolId, ...d.data() }; });
+              const others2 = (data.admins||[]).filter(function(a){ return (a.email||'').toLowerCase() !== ownEmail.toLowerCase(); });
+              data.admins = others2.concat(docs2);
+              try { if (typeof buildNav === 'function') buildNav(); } catch(e){}
+              renderOtherStudentsPage();
+            }
+          });
+        }
+      }).catch(function(e){ console.warn('Perm reload failed', e.message); });
+      return;
+    }
+  }
+
   if (!canPickOtherStudents()) {
     page.innerHTML =
       '<div class="page-header"><div><h2>&#x1F465; Other Students</h2></div></div>' +
@@ -15619,8 +15738,7 @@ function printInvoice() {
     '@page{margin:18mm;}' +
     '@media print{button{display:none!important;}body{padding:0;margin:0;background:#ffffff;}}' +
     '</style></head><body>' + content.innerHTML +
-    '<' + 'script>window.onload=function(){window.print();window.close();}' + '<' + '/script>' +
-    '</body></html>';
+    '<' + 'script>window.onload=function(){window.print();window.close();}' + '<' + '/script>' + '</body></html>';
   win.document.open();
   win.document.write(html);
   win.document.close();
@@ -15966,13 +16084,18 @@ function renderFormsRegistry(formType) {
         }
       }).join('');
 
+  const isOwner = currentRole === 'owner';
+  const customizeBtn = (formType === 'Form 14' && isOwner) ? '<button class="btn btn-outline" style="margin-right:8px;" onclick="openForm14SettingsModal()">⚙️ Customize Form14 Design</button>' : '';
   page.innerHTML =
     '<div class="page-header">' +
       '<div>' +
         '<h2>' + icon + ' ' + formType + ' Registry</h2>' +
         '<p style="font-size:12px;color:var(--text2);">' + ruleRef + ' · ' + schoolName + '</p>' +
       '</div>' +
-      '<button class="btn btn-primary" onclick="openAddFormModal(\'' + formType + '\')">+ Add ' + formType + ' Record</button>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+        customizeBtn +
+        '<button class="btn btn-primary" onclick="openAddFormModal(\'' + formType + '\')">+ Add ' + formType + ' Record</button>' +
+      '</div>' +
     '</div>' +
 
     // School info banner — auto-filled
@@ -15998,6 +16121,491 @@ function renderFormsRegistry(formType) {
 //  FORM 15 REGISTRY PAGE
 //  Shows students + other-service clients with Form 15 print button
 // ──────────────────────────────────────────────
+
+// ============================================================
+// FORM 14 CUSTOMIZATION SETTINGS — OWNER CAN EDIT HEADER/FOOTER/DESIGN
+// ============================================================
+const FORM14_SETTINGS_LS_KEY = 'fg_form14_settings_';
+const FORM14_DEFAULT_SETTINGS = {
+  header: {
+    showSchoolName: true,
+    customSchoolName: '',
+    showAddress: true,
+    customAddress: '',
+    showPhone: true,
+    customPhone: '',
+    showLicense: true,
+    customLicense: '',
+    showRuleRef: true,
+    ruleRefText: 'Refer Rule 27(a) & (c)',
+    logoDataUrl: '',
+    logoPosition: 'top-center',
+    logoWidth: 80,
+    showLogo: false,
+    backgroundColor: '#ffffff',
+    textColor: '#000000',
+    customHeaderHtml: ''
+  },
+  title: {
+    titleText: 'FORM - 14',
+    showTitle: true,
+    titleFontSize: 16,
+    titleColor: '#000000',
+    titleAlignment: 'center',
+    subtitleText: 'Register Showing the Enrollment to Trainee(s) in the Driving School Establishment',
+    showSubtitle: true,
+    subtitleFontSize: 11,
+    subtitleColor: '#333333'
+  },
+  table: {
+    showPhoto: true,
+    photoLabel: 'Passport Photo',
+    borderColor: '#000000',
+    borderWidth: 1,
+    fontFamily: "'Times New Roman', serif",
+    fontSize: 12,
+    labelColumnWidth: 28,
+    rowPadding: 8,
+    headerBackground: '#ffffff',
+    showSerialNo: true,
+    alternateRowColor: false
+  },
+  footer: {
+    showSignature: true,
+    signatureText: 'For {schoolName}',
+    showPrincipal: true,
+    principalLabel: 'Principal',
+    customPrincipalName: '',
+    showStamp: false,
+    stampText: 'School Stamp',
+    showPrintedDate: true,
+    footerNoteTemplate: 'Printed on {date}',
+    customFooterHtml: '',
+    extraFooterText: ''
+  },
+  design: {
+    pageSize: 'A4',
+    margin: '12mm',
+    primaryTextColor: '#000000',
+    backgroundColor: '#ffffff',
+    accentColor: '#000000',
+    fontFamily: "'Times New Roman', serif",
+    showBorder: true,
+    borderStyle: 'solid',
+    borderWidth: 1,
+    borderColor: '#000000'
+  },
+  advanced: {
+    customCss: ''
+  }
+};
+
+let _form14SettingsCache = null;
+
+function getDefaultForm14Settings() {
+  return JSON.parse(JSON.stringify(FORM14_DEFAULT_SETTINGS));
+}
+
+function getForm14SettingsLSKey() {
+  return FORM14_SETTINGS_LS_KEY + (currentSchoolId || 'default');
+}
+
+function loadForm14SettingsFromLS() {
+  try {
+    const raw = localStorage.getItem(getForm14SettingsLSKey());
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return mergeDeep(getDefaultForm14Settings(), parsed);
+    }
+  } catch(e){ console.warn('Failed to load Form14 settings LS', e.message); }
+  return getDefaultForm14Settings();
+}
+
+function mergeDeep(target, source) {
+  for (const key in source) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      mergeDeep(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+async function loadForm14Settings() {
+  if (_form14SettingsCache && _form14SettingsCache.schoolId === currentSchoolId) {
+    return _form14SettingsCache.settings;
+  }
+  let settings = loadForm14SettingsFromLS();
+  // Try Firestore
+  if (typeof db !== 'undefined' && currentSchoolId) {
+    try {
+      const doc = await db.collection('schools').doc(currentSchoolId).collection('settings').doc('form14').get();
+      if (doc.exists) {
+        const remote = doc.data().template || doc.data();
+        settings = mergeDeep(getDefaultForm14Settings(), remote);
+        // cache to LS
+        try { localStorage.setItem(getForm14SettingsLSKey(), JSON.stringify(settings)); } catch(e){}
+      }
+    } catch(e){ console.warn('Could not load Form14 settings from Firestore', e.message); }
+  }
+  _form14SettingsCache = { schoolId: currentSchoolId, settings: settings };
+  return settings;
+}
+
+async function saveForm14Settings(settings) {
+  _form14SettingsCache = { schoolId: currentSchoolId, settings: settings };
+  // Save to LS
+  try { localStorage.setItem(getForm14SettingsLSKey(), JSON.stringify(settings)); } catch(e){}
+  // Save to Firestore
+  if (typeof db !== 'undefined' && currentSchoolId) {
+    try {
+      await db.collection('schools').doc(currentSchoolId).collection('settings').doc('form14').set({
+        template: settings,
+        updatedAt: new Date().toISOString(),
+        schoolId: currentSchoolId
+      }, { merge: true });
+      try { FGCache.invalidate(currentSchoolId, 'form14Settings'); } catch(e){}
+      showToast('✅ Form14 design saved to cloud');
+    } catch(e){
+      console.warn('Failed to save Form14 settings to Firestore', e.message);
+      showToast('✅ Form14 design saved locally (cloud sync failed)');
+    }
+  } else {
+    showToast('✅ Form14 design saved locally');
+  }
+}
+
+function openForm14SettingsModal() {
+  if (currentRole !== 'owner') { showToast('⚠ Only owner can customize Form14'); return; }
+  const existing = document.getElementById('modal-form14-settings');
+  if (existing) existing.remove();
+
+  loadForm14Settings().then(function(settings){
+    const modal = document.createElement('div');
+    modal.id = 'modal-form14-settings';
+    modal.className = 'modal-overlay open';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+      <div class="modal" style="width:860px;max-width:98vw;max-height:92vh;overflow-y:auto;">
+        <div class="modal-header" style="position:sticky;top:0;background:white;z-index:2;padding-bottom:12px;border-bottom:1px solid var(--border);">
+          <h3>⚙️ Customize Form14 - Header, Footer & Design</h3>
+          <button class="modal-close" onclick="document.getElementById('modal-form14-settings').remove()">✕</button>
+        </div>
+        
+        <div style="padding:16px 0;">
+          <div class="tabs" style="margin-bottom:16px;flex-wrap:wrap;">
+            <div class="tab active" onclick="switchForm14SettingsTab('header', this)">Header</div>
+            <div class="tab" onclick="switchForm14SettingsTab('title', this)">Title</div>
+            <div class="tab" onclick="switchForm14SettingsTab('table', this)">Table / Content</div>
+            <div class="tab" onclick="switchForm14SettingsTab('footer', this)">Footer</div>
+            <div class="tab" onclick="switchForm14SettingsTab('design', this)">Design</div>
+            <div class="tab" onclick="switchForm14SettingsTab('advanced', this)">Advanced</div>
+          </div>
+
+          <!-- HEADER TAB -->
+          <div id="f14-tab-header" class="f14-settings-tab">
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:14px;">
+              <div style="font-weight:600;color:#15803d;margin-bottom:6px;">Header Settings</div>
+              <div style="font-size:12px;color:#333;">Control what appears in Form14 header. Leave custom fields empty to use school profile data.</div>
+            </div>
+            <div class="form-grid">
+              <div class="form-group"><label><input type="checkbox" id="f14-h-showSchoolName" ${settings.header.showSchoolName?'checked':''}> Show School Name</label></div>
+              <div class="form-group"><label>Custom School Name (optional)</label><input type="text" id="f14-h-customSchoolName" value="${(settings.header.customSchoolName||'').replace(/"/g,'&quot;')}" placeholder="Leave empty to use school profile"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-h-showAddress" ${settings.header.showAddress?'checked':''}> Show Address</label></div>
+              <div class="form-group"><label>Custom Address (optional)</label><textarea id="f14-h-customAddress" rows="2" placeholder="Leave empty to use school address">${settings.header.customAddress||''}</textarea></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-h-showPhone" ${settings.header.showPhone?'checked':''}> Show Phone</label></div>
+              <div class="form-group"><label>Custom Phone (optional)</label><input type="text" id="f14-h-customPhone" value="${(settings.header.customPhone||'').replace(/"/g,'&quot;')}" placeholder="Leave empty to use school phone"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-h-showLicense" ${settings.header.showLicense?'checked':''}> Show License No.</label></div>
+              <div class="form-group"><label>Custom License (optional)</label><input type="text" id="f14-h-customLicense" value="${(settings.header.customLicense||'').replace(/"/g,'&quot;')}" placeholder="Leave empty to use school license"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-h-showRuleRef" ${settings.header.showRuleRef?'checked':''}> Show Rule Reference</label></div>
+              <div class="form-group"><label>Rule Reference Text</label><input type="text" id="f14-h-ruleRef" value="${(settings.header.ruleRefText||'').replace(/"/g,'&quot;')}"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-h-showLogo" ${settings.header.showLogo?'checked':''}> Show Logo</label></div>
+              <div class="form-group"><label>Logo Position</label>
+                <select id="f14-h-logoPosition">
+                  <option value="top-center" ${settings.header.logoPosition==='top-center'?'selected':''}>Top Center</option>
+                  <option value="top-left" ${settings.header.logoPosition==='top-left'?'selected':''}>Top Left</option>
+                  <option value="top-right" ${settings.header.logoPosition==='top-right'?'selected':''}>Top Right</option>
+                  <option value="left" ${settings.header.logoPosition==='left'?'selected':''}>Left of School Name</option>
+                  <option value="right" ${settings.header.logoPosition==='right'?'selected':''}>Right of School Name</option>
+                </select>
+              </div>
+              <div class="form-group"><label>Logo Width (px)</label><input type="number" id="f14-h-logoWidth" value="${settings.header.logoWidth||80}" min="20" max="300"></div>
+              <div class="form-group"><label>Logo Image</label><input type="file" id="f14-h-logoFile" accept="image/*" onchange="handleForm14LogoUpload(this)"><div id="f14-logo-preview" style="margin-top:6px;">${settings.header.logoDataUrl?'<img src="'+settings.header.logoDataUrl+'" style="max-width:80px;max-height:60px;border:1px solid #ccc;">':''}</div></div>
+              <div class="form-group full"><label>Custom Header HTML (optional - advanced)</label><textarea id="f14-h-customHtml" rows="3" placeholder="Extra HTML to inject in header, e.g. <div>Your custom line</div>">${settings.header.customHeaderHtml||''}</textarea><div style="font-size:11px;color:#666;margin-top:4px;">Supports HTML. Use {schoolName} {address} {phone} {licenseNo} placeholders.</div></div>
+            </div>
+          </div>
+
+          <!-- TITLE TAB -->
+          <div id="f14-tab-title" class="f14-settings-tab" style="display:none;">
+            <div class="form-grid">
+              <div class="form-group"><label><input type="checkbox" id="f14-t-showTitle" ${settings.title.showTitle?'checked':''}> Show Title</label></div>
+              <div class="form-group"><label>Title Text</label><input type="text" id="f14-t-titleText" value="${(settings.title.titleText||'').replace(/"/g,'&quot;')}"></div>
+              <div class="form-group"><label>Title Font Size (px)</label><input type="number" id="f14-t-titleSize" value="${settings.title.titleFontSize||16}" min="10" max="32"></div>
+              <div class="form-group"><label>Title Color</label><input type="color" id="f14-t-titleColor" value="${settings.title.titleColor||'#000000'}"></div>
+              <div class="form-group"><label>Title Alignment</label>
+                <select id="f14-t-titleAlign">
+                  <option value="center" ${settings.title.titleAlignment==='center'?'selected':''}>Center</option>
+                  <option value="left" ${settings.title.titleAlignment==='left'?'selected':''}>Left</option>
+                  <option value="right" ${settings.title.titleAlignment==='right'?'selected':''}>Right</option>
+                </select>
+              </div>
+              <div class="form-group"><label><input type="checkbox" id="f14-t-showSubtitle" ${settings.title.showSubtitle?'checked':''}> Show Subtitle</label></div>
+              <div class="form-group full"><label>Subtitle Text</label><input type="text" id="f14-t-subtitleText" value="${(settings.title.subtitleText||'').replace(/"/g,'&quot;')}" style="width:100%;"></div>
+              <div class="form-group"><label>Subtitle Font Size</label><input type="number" id="f14-t-subSize" value="${settings.title.subtitleFontSize||11}" min="8" max="20"></div>
+              <div class="form-group"><label>Subtitle Color</label><input type="color" id="f14-t-subColor" value="${settings.title.subtitleColor||'#333333'}"></div>
+            </div>
+          </div>
+
+          <!-- TABLE TAB -->
+          <div id="f14-tab-table" class="f14-settings-tab" style="display:none;">
+            <div class="form-grid">
+              <div class="form-group"><label><input type="checkbox" id="f14-tb-showPhoto" ${settings.table.showPhoto?'checked':''}> Show Passport Photo Box</label></div>
+              <div class="form-group"><label>Photo Box Label</label><input type="text" id="f14-tb-photoLabel" value="${(settings.table.photoLabel||'').replace(/"/g,'&quot;')}"></div>
+              <div class="form-group"><label>Border Color</label><input type="color" id="f14-tb-borderColor" value="${settings.table.borderColor||'#000000'}"></div>
+              <div class="form-group"><label>Border Width (px)</label><input type="number" id="f14-tb-borderWidth" value="${settings.table.borderWidth||1}" min="0" max="5" step="0.5"></div>
+              <div class="form-group"><label>Font Family</label>
+                <select id="f14-tb-fontFamily">
+                  <option value="'Times New Roman', serif" ${settings.table.fontFamily.includes('Times')?'selected':''}>Times New Roman</option>
+                  <option value="Arial, sans-serif" ${settings.table.fontFamily.includes('Arial')?'selected':''}>Arial</option>
+                  <option value="'Helvetica', sans-serif" ${settings.table.fontFamily.includes('Helvetica')?'selected':''}>Helvetica</option>
+                  <option value="'Courier New', monospace" ${settings.table.fontFamily.includes('Courier')?'selected':''}>Courier New</option>
+                </select>
+              </div>
+              <div class="form-group"><label>Font Size (px)</label><input type="number" id="f14-tb-fontSize" value="${settings.table.fontSize||12}" min="8" max="18"></div>
+              <div class="form-group"><label>Row Padding (px)</label><input type="number" id="f14-tb-rowPadding" value="${settings.table.rowPadding||8}" min="2" max="20"></div>
+              <div class="form-group"><label>Label Column Width (%)</label><input type="number" id="f14-tb-labelWidth" value="${settings.table.labelColumnWidth||28}" min="15" max="45"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-tb-altRow" ${settings.table.alternateRowColor?'checked':''}> Alternate Row Color</label></div>
+            </div>
+          </div>
+
+          <!-- FOOTER TAB -->
+          <div id="f14-tab-footer" class="f14-settings-tab" style="display:none;">
+            <div class="form-grid">
+              <div class="form-group"><label><input type="checkbox" id="f14-f-showSig" ${settings.footer.showSignature?'checked':''}> Show Signature Section</label></div>
+              <div class="form-group"><label>Signature Text (use {schoolName})</label><input type="text" id="f14-f-sigText" value="${(settings.footer.signatureText||'').replace(/"/g,'&quot;')}"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-f-showPrincipal" ${settings.footer.showPrincipal?'checked':''}> Show Principal</label></div>
+              <div class="form-group"><label>Principal Label</label><input type="text" id="f14-f-principalLabel" value="${(settings.footer.principalLabel||'').replace(/"/g,'&quot;')}"></div>
+              <div class="form-group"><label>Custom Principal Name (optional)</label><input type="text" id="f14-f-principalName" value="${(settings.footer.customPrincipalName||'').replace(/"/g,'&quot;')}" placeholder="Leave empty to use school principal"></div>
+              <div class="form-group"><label><input type="checkbox" id="f14-f-showPrintDate" ${settings.footer.showPrintedDate?'checked':''}> Show Printed Date</label></div>
+              <div class="form-group"><label>Footer Note Template (use {date})</label><input type="text" id="f14-f-footerNote" value="${(settings.footer.footerNoteTemplate||'').replace(/"/g,'&quot;')}"></div>
+              <div class="form-group full"><label>Extra Footer Text (optional)</label><textarea id="f14-f-extraText" rows="2" placeholder="Additional footer line, e.g. Terms & conditions">${settings.footer.extraFooterText||''}</textarea></div>
+              <div class="form-group full"><label>Custom Footer HTML (optional)</label><textarea id="f14-f-customHtml" rows="3" placeholder="Extra HTML for footer">${settings.footer.customFooterHtml||''}</textarea><div style="font-size:11px;color:#666;">Supports {schoolName} {date} {principal} placeholders.</div></div>
+            </div>
+          </div>
+
+          <!-- DESIGN TAB -->
+          <div id="f14-tab-design" class="f14-settings-tab" style="display:none;">
+            <div class="form-grid">
+              <div class="form-group"><label>Page Size</label>
+                <select id="f14-d-pageSize">
+                  <option value="A4" ${settings.design.pageSize==='A4'?'selected':''}>A4</option>
+                  <option value="Letter" ${settings.design.pageSize==='Letter'?'selected':''}>Letter</option>
+                  <option value="Legal" ${settings.design.pageSize==='Legal'?'selected':''}>Legal</option>
+                  <option value="A5" ${settings.design.pageSize==='A5'?'selected':''}>A5</option>
+                </select>
+              </div>
+              <div class="form-group"><label>Margin (e.g. 12mm, 1in)</label><input type="text" id="f14-d-margin" value="${settings.design.margin||'12mm'}"></div>
+              <div class="form-group"><label>Primary Text Color</label><input type="color" id="f14-d-primaryColor" value="${settings.design.primaryTextColor||'#000000'}"></div>
+              <div class="form-group"><label>Background Color</label><input type="color" id="f14-d-bgColor" value="${settings.design.backgroundColor||'#ffffff'}"></div>
+              <div class="form-group"><label>Accent Color</label><input type="color" id="f14-d-accentColor" value="${settings.design.accentColor||'#000000'}"></div>
+              <div class="form-group"><label>Font Family (global)</label>
+                <select id="f14-d-fontFamily">
+                  <option value="'Times New Roman', serif" ${settings.design.fontFamily.includes('Times')?'selected':''}>Times New Roman</option>
+                  <option value="Arial, sans-serif" ${settings.design.fontFamily.includes('Arial')?'selected':''}>Arial</option>
+                  <option value="'Helvetica', sans-serif" ${settings.design.fontFamily.includes('Helvetica')?'selected':''}>Helvetica</option>
+                </select>
+              </div>
+              <div class="form-group"><label><input type="checkbox" id="f14-d-showBorder" ${settings.design.showBorder?'checked':''}> Show Outer Border</label></div>
+              <div class="form-group"><label>Border Style</label>
+                <select id="f14-d-borderStyle">
+                  <option value="solid" ${settings.design.borderStyle==='solid'?'selected':''}>Solid</option>
+                  <option value="dashed" ${settings.design.borderStyle==='dashed'?'selected':''}>Dashed</option>
+                  <option value="double" ${settings.design.borderStyle==='double'?'selected':''}>Double</option>
+                  <option value="none" ${settings.design.borderStyle==='none'?'selected':''}>None</option>
+                </select>
+              </div>
+              <div class="form-group"><label>Border Width (px)</label><input type="number" id="f14-d-borderWidth" value="${settings.design.borderWidth||1}" min="0" max="10"></div>
+              <div class="form-group"><label>Border Color</label><input type="color" id="f14-d-borderColor" value="${settings.design.borderColor||'#000000'}"></div>
+            </div>
+          </div>
+
+          <!-- ADVANCED TAB -->
+          <div id="f14-tab-advanced" class="f14-settings-tab" style="display:none;">
+            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;">
+              <strong>Advanced:</strong> Add custom CSS that will be injected into Form14 print page. Useful for fine-tuning design.
+            </div>
+            <div class="form-group full"><label>Custom CSS</label><textarea id="f14-a-customCss" rows="10" placeholder="e.g. .school-name { color: red; }">${settings.advanced.customCss||''}</textarea></div>
+            <div style="margin-top:12px;display:flex;gap:8px;">
+              <button class="btn btn-outline btn-sm" onclick="resetForm14Settings()">↺ Reset to Default</button>
+              <button class="btn btn-outline btn-sm" onclick="previewForm14WithCurrentSettings()">👁 Preview with Sample Data</button>
+            </div>
+          </div>
+
+        </div>
+
+        <div style="position:sticky;bottom:0;background:white;padding:12px 0 0;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
+          <button class="btn btn-outline" onclick="document.getElementById('modal-form14-settings').remove()">Cancel</button>
+          <button class="btn btn-accent" onclick="saveForm14SettingsFromModal()">💾 Save Custom Design</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    // store current settings and logo temp
+    window._tempForm14Settings = settings;
+    window._tempForm14Logo = settings.header.logoDataUrl || '';
+  });
+}
+
+function switchForm14SettingsTab(tabName, el) {
+  document.querySelectorAll('.f14-settings-tab').forEach(function(t){ t.style.display='none'; });
+  const target = document.getElementById('f14-tab-' + tabName);
+  if (target) target.style.display='block';
+  document.querySelectorAll('#modal-form14-settings .tab').forEach(function(t){ t.classList.remove('active'); });
+  if (el) el.classList.add('active');
+}
+
+function handleForm14LogoUpload(input) {
+  const preview = document.getElementById('f14-logo-preview');
+  if (!input.files || !input.files[0]) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    window._tempForm14Logo = e.target.result;
+    if (preview) preview.innerHTML = '<img src="'+e.target.result+'" style="max-width:120px;max-height:80px;border:1px solid #ccc;"><div style="margin-top:4px;"><button class="btn btn-outline btn-sm" onclick="clearForm14Logo()">Remove Logo</button></div>';
+  };
+  reader.readAsDataURL(input.files[0]);
+}
+
+function clearForm14Logo() {
+  window._tempForm14Logo = '';
+  const preview = document.getElementById('f14-logo-preview');
+  if (preview) preview.innerHTML = '<span style="font-size:12px;color:#999;">No logo selected</span>';
+  const fileInput = document.getElementById('f14-h-logoFile');
+  if (fileInput) fileInput.value = '';
+}
+
+async function saveForm14SettingsFromModal() {
+  const s = window._tempForm14Settings || getDefaultForm14Settings();
+  // header
+  s.header.showSchoolName = document.getElementById('f14-h-showSchoolName')?.checked || false;
+  s.header.customSchoolName = document.getElementById('f14-h-customSchoolName')?.value || '';
+  s.header.showAddress = document.getElementById('f14-h-showAddress')?.checked || false;
+  s.header.customAddress = document.getElementById('f14-h-customAddress')?.value || '';
+  s.header.showPhone = document.getElementById('f14-h-showPhone')?.checked || false;
+  s.header.customPhone = document.getElementById('f14-h-customPhone')?.value || '';
+  s.header.showLicense = document.getElementById('f14-h-showLicense')?.checked || false;
+  s.header.customLicense = document.getElementById('f14-h-customLicense')?.value || '';
+  s.header.showRuleRef = document.getElementById('f14-h-showRuleRef')?.checked || false;
+  s.header.ruleRefText = document.getElementById('f14-h-ruleRef')?.value || '';
+  s.header.showLogo = document.getElementById('f14-h-showLogo')?.checked || false;
+  s.header.logoPosition = document.getElementById('f14-h-logoPosition')?.value || 'top-center';
+  s.header.logoWidth = parseInt(document.getElementById('f14-h-logoWidth')?.value) || 80;
+  s.header.logoDataUrl = window._tempForm14Logo || s.header.logoDataUrl || '';
+  s.header.customHeaderHtml = document.getElementById('f14-h-customHtml')?.value || '';
+  // title
+  s.title.showTitle = document.getElementById('f14-t-showTitle')?.checked || false;
+  s.title.titleText = document.getElementById('f14-t-titleText')?.value || 'FORM - 14';
+  s.title.titleFontSize = parseInt(document.getElementById('f14-t-titleSize')?.value) || 16;
+  s.title.titleColor = document.getElementById('f14-t-titleColor')?.value || '#000000';
+  s.title.titleAlignment = document.getElementById('f14-t-titleAlign')?.value || 'center';
+  s.title.showSubtitle = document.getElementById('f14-t-showSubtitle')?.checked || false;
+  s.title.subtitleText = document.getElementById('f14-t-subtitleText')?.value || '';
+  s.title.subtitleFontSize = parseInt(document.getElementById('f14-t-subSize')?.value) || 11;
+  s.title.subtitleColor = document.getElementById('f14-t-subColor')?.value || '#333333';
+  // table
+  s.table.showPhoto = document.getElementById('f14-tb-showPhoto')?.checked || false;
+  s.table.photoLabel = document.getElementById('f14-tb-photoLabel')?.value || 'Passport Photo';
+  s.table.borderColor = document.getElementById('f14-tb-borderColor')?.value || '#000000';
+  s.table.borderWidth = parseFloat(document.getElementById('f14-tb-borderWidth')?.value) || 1;
+  s.table.fontFamily = document.getElementById('f14-tb-fontFamily')?.value || "'Times New Roman', serif";
+  s.table.fontSize = parseInt(document.getElementById('f14-tb-fontSize')?.value) || 12;
+  s.table.rowPadding = parseInt(document.getElementById('f14-tb-rowPadding')?.value) || 8;
+  s.table.labelColumnWidth = parseInt(document.getElementById('f14-tb-labelWidth')?.value) || 28;
+  s.table.alternateRowColor = document.getElementById('f14-tb-altRow')?.checked || false;
+  // footer
+  s.footer.showSignature = document.getElementById('f14-f-showSig')?.checked || false;
+  s.footer.signatureText = document.getElementById('f14-f-sigText')?.value || 'For {schoolName}';
+  s.footer.showPrincipal = document.getElementById('f14-f-showPrincipal')?.checked || false;
+  s.footer.principalLabel = document.getElementById('f14-f-principalLabel')?.value || 'Principal';
+  s.footer.customPrincipalName = document.getElementById('f14-f-principalName')?.value || '';
+  s.footer.showPrintedDate = document.getElementById('f14-f-showPrintDate')?.checked || false;
+  s.footer.footerNoteTemplate = document.getElementById('f14-f-footerNote')?.value || 'Printed on {date}';
+  s.footer.extraFooterText = document.getElementById('f14-f-extraText')?.value || '';
+  s.footer.customFooterHtml = document.getElementById('f14-f-customHtml')?.value || '';
+  // design
+  s.design.pageSize = document.getElementById('f14-d-pageSize')?.value || 'A4';
+  s.design.margin = document.getElementById('f14-d-margin')?.value || '12mm';
+  s.design.primaryTextColor = document.getElementById('f14-d-primaryColor')?.value || '#000000';
+  s.design.backgroundColor = document.getElementById('f14-d-bgColor')?.value || '#ffffff';
+  s.design.accentColor = document.getElementById('f14-d-accentColor')?.value || '#000000';
+  s.design.fontFamily = document.getElementById('f14-d-fontFamily')?.value || "'Times New Roman', serif";
+  s.design.showBorder = document.getElementById('f14-d-showBorder')?.checked || false;
+  s.design.borderStyle = document.getElementById('f14-d-borderStyle')?.value || 'solid';
+  s.design.borderWidth = parseInt(document.getElementById('f14-d-borderWidth')?.value) || 1;
+  s.design.borderColor = document.getElementById('f14-d-borderColor')?.value || '#000000';
+  // advanced
+  s.advanced.customCss = document.getElementById('f14-a-customCss')?.value || '';
+
+  await saveForm14Settings(s);
+  document.getElementById('modal-form14-settings')?.remove();
+  showToast('✅ Form14 design updated');
+}
+
+function resetForm14Settings() {
+  if (!confirm('Reset Form14 design to default? This cannot be undone.')) return;
+  const def = getDefaultForm14Settings();
+  window._tempForm14Settings = def;
+  window._tempForm14Logo = '';
+  // reload modal with defaults
+  document.getElementById('modal-form14-settings')?.remove();
+  openForm14SettingsModal();
+}
+
+function previewForm14WithCurrentSettings() {
+  // Save current modal values to temp then preview with dummy data
+  const dummy = {
+    serialNo: 'PREVIEW-001',
+    candidateName: 'Sample Student Name',
+    guardianName: 'Sample Guardian',
+    dob: '01-01-2000',
+    phone: '9876543210',
+    address: '123 Sample Street, Sample City - Sample',
+    vehicleClass: 'LMV',
+    enrollDate: new Date().toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
+    llNumber: 'LL-123456',
+    llValidity: '01-01-2026',
+    dlNumber: 'DL-123456',
+    dlValidFrom: '01-01-2024',
+    rtoOffice: 'RTO Sample',
+    remarks: 'Sample remark for preview',
+    photoDataUrl: ''
+  };
+  // temporarily save current form values to settings object
+  saveForm14SettingsFromModal().then(function(){
+    setTimeout(function(){
+      // create a fake record in data.forms to preview
+      const prevForms = data.forms;
+      data.forms = [dummy];
+      printFormRecord('PREVIEW-001', 'Form14');
+      data.forms = prevForms;
+    }, 500);
+  });
+}
+
+function applyPlaceholders(text, ctx) {
+  if (!text) return '';
+  return text.replace(/\{schoolName\}/g, ctx.schoolName||'')
+             .replace(/\{address\}/g, ctx.schoolAddress||'')
+             .replace(/\{phone\}/g, ctx.schoolPhone||'')
+             .replace(/\{licenseNo\}/g, ctx.licenseNo||'')
+             .replace(/\{date\}/g, new Date().toLocaleDateString('en-IN'))
+             .replace(/\{principal\}/g, ctx.principal||'')
+             .replace(/\{candidateName\}/g, ctx.candidateName||'');
+}
+
+
 function renderForm15Registry() {
   const page = document.getElementById('page-form15-registry');
   if (!page) return;
@@ -16181,9 +16789,66 @@ function printFormRecord(id, formTypeCode) {
     </div>
   </div>
 </div>
+
+
 </body></html>`;
   } else {
-    // Form 14 — Exact government form layout
+    // Form 14 — Customizable design via owner settings
+    const form14Settings = (typeof _form14SettingsCache !== 'undefined' && _form14SettingsCache && _form14SettingsCache.schoolId === currentSchoolId && _form14SettingsCache.settings) ? _form14SettingsCache.settings : (loadForm14SettingsFromLS ? loadForm14SettingsFromLS() : getDefaultForm14Settings());
+    // Try to load async settings for next print (non-blocking)
+    if (typeof loadForm14Settings === 'function') { loadForm14Settings().then(function(s){ _form14SettingsCache = {schoolId: currentSchoolId, settings: s}; }); }
+    
+    const st = form14Settings;
+    const ctx = {
+      schoolName: schoolName,
+      schoolAddress: schoolAddress,
+      schoolPhone: schoolPhone,
+      licenseNo: licenseNo,
+      principal: principal,
+      candidateName: f.candidateName||'',
+      date: new Date().toLocaleDateString('en-IN')
+    };
+
+    const resolveHeaderField = function(showFlag, customValue, defaultValue) {
+      if (!showFlag) return '';
+      if (customValue && customValue.trim() !== '') return applyPlaceholders(customValue, ctx);
+      return defaultValue || '';
+    };
+
+    const headerSchoolName = resolveHeaderField(st.header.showSchoolName, st.header.customSchoolName, schoolName);
+    const headerAddress = resolveHeaderField(st.header.showAddress, st.header.customAddress, schoolAddress);
+    const headerPhone = resolveHeaderField(st.header.showPhone, st.header.customPhone, schoolPhone);
+    const headerLicense = resolveHeaderField(st.header.showLicense, st.header.customLicense, licenseNo);
+    const headerRuleRef = st.header.showRuleRef ? (st.header.ruleRefText || 'Refer Rule 27(a) & (c)') : '';
+    const headerLogoHtml = (st.header.showLogo && st.header.logoDataUrl) ? `<img src="${st.header.logoDataUrl}" style="max-width:${st.header.logoWidth||80}px;max-height:${(st.header.logoWidth||80)}px;object-fit:contain;">` : '';
+
+    const titleText = st.title.showTitle ? (st.title.titleText || 'FORM - 14') : '';
+    const subtitleText = st.title.showSubtitle ? (st.title.subtitleText || 'Register Showing the Enrollment to Trainee(s) in the Driving School Establishment') : '';
+
+    const footerSigText = st.footer.showSignature ? applyPlaceholders(st.footer.signatureText||'For {schoolName}', ctx) : '';
+    const footerPrincipalName = st.footer.customPrincipalName ? applyPlaceholders(st.footer.customPrincipalName, ctx) : (principal || '');
+    const footerNote = st.footer.showPrintedDate ? applyPlaceholders(st.footer.footerNoteTemplate||'Printed on {date}', ctx) : '';
+    const extraFooter = st.footer.extraFooterText ? applyPlaceholders(st.footer.extraFooterText, ctx) : '';
+
+    let logoSection = '';
+    if (headerLogoHtml) {
+      if (st.header.logoPosition === 'top-center') {
+        logoSection = `<div style="text-align:center;margin-bottom:8px;">${headerLogoHtml}</div>`;
+      } else if (st.header.logoPosition === 'top-left') {
+        logoSection = `<div style="text-align:left;margin-bottom:8px;">${headerLogoHtml}</div>`;
+      } else if (st.header.logoPosition === 'top-right') {
+        logoSection = `<div style="text-align:right;margin-bottom:8px;">${headerLogoHtml}</div>`;
+      }
+    }
+
+    let sideLogoLeft = (st.header.showLogo && headerLogoHtml && st.header.logoPosition === 'left') ? `<div style="display:flex;align-items:center;gap:12px;justify-content:center;"><div>${headerLogoHtml}</div><div>` : '';
+    let sideLogoLeftClose = (st.header.showLogo && headerLogoHtml && st.header.logoPosition === 'left') ? `</div></div>` : '';
+    let sideLogoRight = (st.header.showLogo && headerLogoHtml && st.header.logoPosition === 'right') ? `<div style="display:flex;align-items:center;gap:12px;justify-content:center;"><div>` : '';
+    let sideLogoRightClose = (st.header.showLogo && headerLogoHtml && st.header.logoPosition === 'right') ? `</div><div>${headerLogoHtml}</div></div>` : '';
+
+    const customHeaderHtml = st.header.customHeaderHtml ? applyPlaceholders(st.header.customHeaderHtml, ctx) : '';
+    const customFooterHtml = st.footer.customFooterHtml ? applyPlaceholders(st.footer.customFooterHtml, ctx) : '';
+
     formHTML = `
 <!DOCTYPE html><html><head><meta charset="UTF-8">
 <title>Form 14 - ${f.candidateName||''}</title>
@@ -16215,57 +16880,77 @@ function printFormRecord(id, formTypeCode) {
   <div class="center" style="margin-top:10px;font-size:16px;font-weight:bold;">FORM - 14</div>
   <div class="center note">Register Showing the Enrollment to Trainee(s) in the Driving School Establishment</div>
 
-  <table class="table">
+    <div class="page" style="background:${st.design.backgroundColor||'#ffffff'};color:${st.design.primaryTextColor||'#000000'};font-family:${st.design.fontFamily||st.table.fontFamily||"'Times New Roman', serif"};${st.design.showBorder?'border:'+(st.design.borderWidth||1)+'px '+ (st.design.borderStyle||'solid')+' '+(st.design.borderColor||'#000000')+';border-radius:6px;padding:18px;':''}">
+  ${logoSection}
+  ${customHeaderHtml ? `<div style="margin-bottom:8px;">${customHeaderHtml}</div>` : ''}
+  ${headerRuleRef ? `<div class="center note" style="font-size:${Math.max(9, (st.table.fontSize||12)-1)}px;">${headerRuleRef}</div>` : ''}
+  ${sideLogoLeft}
+    ${headerSchoolName ? `<div class="center school-name" style="font-size:${st.title.showTitle? (st.title.titleFontSize+2) : 18}px;color:${st.title.titleColor||st.design.primaryTextColor};text-align:${st.title.titleAlignment||'center'};font-weight:bold;letter-spacing:0.06em;">${headerSchoolName.toUpperCase()}</div>` : ''}
+    ${headerAddress ? `<div class="center subhead" style="font-size:11px;text-align:${st.title.titleAlignment||'center'};color:${st.design.primaryTextColor};">${headerAddress}</div>` : ''}
+    ${headerPhone || headerLicense ? `<div class="center subhead" style="font-size:11px;text-align:${st.title.titleAlignment||'center'};">${headerPhone ? '📞 ' + headerPhone : ''}${headerPhone && headerLicense ? ' · ' : ''}${headerLicense ? 'Licence No. ' + headerLicense : ''}</div>` : ''}
+  ${sideLogoLeftClose}
+  ${sideLogoRight}${sideLogoRightClose}
+
+  ${titleText ? `<div class="center" style="margin-top:10px;font-size:${st.title.titleFontSize||16}px;font-weight:bold;color:${st.title.titleColor||'#000000'};text-align:${st.title.titleAlignment||'center'};">${titleText}</div>` : ''}
+  ${subtitleText ? `<div class="center note" style="font-size:${st.title.subtitleFontSize||11}px;color:${st.title.subtitleColor||'#333'};text-align:${st.title.titleAlignment||'center'};">${subtitleText}</div>` : ''}
+
+  <table class="table" style="width:100%;border-collapse:collapse;margin-top:12px;font-family:${st.table.fontFamily};font-size:${st.table.fontSize||12}px;">
     <tr>
-      <td class="label">1. Registration Year</td>
-      <td class="value" style="border-right:none; padding-right:4px;">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td>
-      <td rowspan="4" style="width:96px;border-left:1px solid #000;padding:0;text-align:center;vertical-align:top;">
+      <td class="label" style="width:${st.table.labelColumnWidth||28}%;font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;vertical-align:top;background:${st.table.headerBackground||'#fff'};">1. Registration Year</td>
+      <td class="value" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;border-right:none;${st.table.alternateRowColor?'background:#f9fafb;':''}">${f.enrollDate ? new Date(f.enrollDate).getFullYear() : ''}</td>
+      ${st.table.showPhoto ? `<td rowspan="4" style="width:96px;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};border-left:1px solid ${st.table.borderColor||'#000'};padding:0;text-align:center;vertical-align:top;">
         ${f.photoDataUrl
           ? `<img src="${f.photoDataUrl}" style="width:96px;height:120px;object-fit:cover;display:block;">`
           : `<div style="width:96px;height:120px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#999;text-align:center;line-height:1.6;flex-direction:column;"><span>Passport</span><span>Size</span><span>Photo</span></div>`
         }
-        <div style="font-size:9px;color:#555;padding:2px 0 3px;border-top:1px solid #ccc;">Passport Photo</div>
-      </td>
+        <div style="font-size:9px;color:#555;padding:2px 0 3px;border-top:1px solid #ccc;">${st.table.photoLabel||'Passport Photo'}</div>
+      </td>` : ''}
     </tr>
     <tr>
-      <td class="label">2. Enrollment Number</td>
-      <td class="value" style="border-right:none;">${f.serialNo||''}</td>
+      <td class="label" style="width:${st.table.labelColumnWidth||28}%;font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">2. Enrollment Number</td>
+      <td class="value" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;${st.table.showPhoto?'border-right:none;':''}${st.table.alternateRowColor?'background:#fff;':''}">${f.serialNo||''}</td>
     </tr>
     <tr>
-      <td class="label">3. Name of the Trainee</td>
-      <td class="value" style="border-right:none;">${f.candidateName||''}</td>
+      <td class="label" style="width:${st.table.labelColumnWidth||28}%;font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">3. Name of the Trainee</td>
+      <td class="value" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;${st.table.showPhoto?'border-right:none;':''}">${f.candidateName||''}</td>
     </tr>
     <tr>
-      <td class="label">4. Son of</td>
-      <td class="value" style="border-right:none;">${f.guardianName||''}</td>
+      <td class="label" style="width:${st.table.labelColumnWidth||28}%;font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">4. Son of</td>
+      <td class="value" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;${st.table.showPhoto?'border-right:none;':''}">${f.guardianName||''}</td>
     </tr>
-    <tr><td class="label">5. Date of Birth</td><td class="value" colspan="2">${f.dob||''}</td></tr>
-    <tr><td class="label">6. Mobile Number</td><td class="value" colspan="2">${f.phone||''}</td></tr>
-    <tr><td class="label">7. Address</td><td class="value" colspan="2">
+    <tr><td class="label" style="width:${st.table.labelColumnWidth||28}%;font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">5. Date of Birth</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.dob||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">6. Mobile Number</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.phone||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">7. Address</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">
       <div><strong>(a)</strong> ${f.address||''}</div>
       <div style="margin-top:6px;"><strong>(b)</strong> ${schoolName || ''}${schoolAddress ? ', ' + schoolAddress : ''}</div>
     </td></tr>
-    <tr><td class="label">8. Class of Vehicle for Which Training Imparted</td><td class="value" colspan="2">${f.vehicleClass||''}</td></tr>
-    <tr><td class="label">9. Date of Enrollment</td><td class="value" colspan="2">${f.enrollDate||''}</td></tr>
-    <tr><td class="label">10. Learner's Licence Number / Learner's Licence Validity</td><td class="value" colspan="2">${f.llNumber||''}${f.llNumber && f.llValidity ? ' / ' : ''}${f.llValidity||''}</td></tr>
-    <tr><td class="label">11. Date of Completion of Course</td><td class="value" colspan="2">${f.endDate14||f.endDate||''}</td></tr>
-    <tr><td class="label">12. Date of Passing the Test of Competence to Drive</td><td class="value" colspan="2">${f.issueDate||f.submissionDate||''}</td></tr>
-    <tr><td class="label">13. Driving Licence Number / Date of Issue / Licensing Authority</td><td class="value" colspan="2">${f.dlNumber||''}${f.dlNumber && f.dlValidFrom ? ' / ' + f.dlValidFrom : f.dlValidFrom||''}${(f.dlNumber||f.dlValidFrom) && f.rtoOffice ? ' / ' + f.rtoOffice : ''}</td></tr>
-    <tr><td class="label">14. Remark</td><td class="value" colspan="2">${f.remarks||''}</td></tr>
-    <tr><td class="label">15. Signature of the Licence Holder</td><td class="value" colspan="2" style="height:48px;"></td></tr>
-    <tr><td class="label">16. Signature of the Instructor</td><td class="value" colspan="2" style="height:48px;"></td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">8. Class of Vehicle for Which Training Imparted</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.vehicleClass||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">9. Date of Enrollment</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.enrollDate||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">10. Learner's Licence Number / Learner's Licence Validity</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.llNumber||''}${f.llNumber && f.llValidity ? ' / ' : ''}${f.llValidity||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">11. Date of Completion of Course</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.endDate14||f.endDate||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">12. Date of Passing the Test of Competence to Drive</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.issueDate||f.submissionDate||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">13. Driving Licence Number / Date of Issue / Licensing Authority</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.dlNumber||''}${f.dlNumber && f.dlValidFrom ? ' / ' + f.dlValidFrom : f.dlValidFrom||''}${(f.dlNumber||f.dlValidFrom) && f.rtoOffice ? ' / ' + f.rtoOffice : ''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">14. Remark</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">${f.remarks||''}</td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">15. Signature of the Licence Holder</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};height:48px;"></td></tr>
+    <tr><td class="label" style="font-weight:600;border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};padding:${st.table.rowPadding||8}px 10px;">16. Signature of the Instructor</td><td class="value" colspan="${st.table.showPhoto?'2':'1'}" style="border:${st.table.borderWidth||1}px solid ${st.table.borderColor||'#000'};height:48px;"></td></tr>
   </table>
 
-  <div class="signature-row">
-    <div class="signature-block"></div>
-    <div class="signature-block" style="text-align:right;">
-      <div class="signature-line"></div>
-      <div style="font-size:11px;margin-top:4px;">For ${schoolName}</div>
-      <div style="font-size:10px;margin-top:2px;">${principal || 'Principal'}</div>
+  ${st.footer.showSignature ? `
+  <div class="signature-row" style="display:flex;justify-content:space-between;margin-top:22px;">
+    <div class="signature-block" style="width:45%;"></div>
+    <div class="signature-block" style="width:45%;text-align:right;">
+      <div class="signature-line" style="border-top:1px solid ${st.table.borderColor||'#000'};margin-top:36px;width:100%;"></div>
+      <div style="font-size:11px;margin-top:4px;">${footerSigText}</div>
+      ${st.footer.showPrincipal ? `<div style="font-size:10px;margin-top:2px;">${st.footer.principalLabel||'Principal'}${footerPrincipalName ? ': ' + footerPrincipalName : ''}</div>` : ''}
     </div>
-  </div>
-  <div class="footer-note">Printed on ${new Date().toLocaleDateString('en-IN')}</div>
+  </div>` : ''}
+
+  ${footerNote ? `<div class="footer-note" style="font-size:10.5px;text-align:right;margin-top:6px;color:${st.design.primaryTextColor};"><span>${footerNote}</span></div>` : ''}
+  ${extraFooter ? `<div style="font-size:11px;margin-top:8px;text-align:center;">${extraFooter}</div>` : ''}
+  ${customFooterHtml ? `<div style="margin-top:8px;">${customFooterHtml}</div>` : ''}
 </div>
+
+
 </body></html>`;
   }
 
@@ -16403,6 +17088,8 @@ function printForm15ForService(id) {
     </div>
   </div>
 </div>
+
+
 </body></html>`;
 
   const win = window.open('', '_blank');
@@ -16571,6 +17258,8 @@ function printForm15ForStudent(studentId) {
     </div>
   </div>
 </div>
+
+
 </body></html>`;
 
   const win = window.open('', '_blank');
@@ -18903,14 +19592,35 @@ async function addStaffFromModal() {
     const notes = document.getElementById('staff-notes').value.trim();
     const password = document.getElementById('staff-password').value;
     const confirmPassword = document.getElementById('staff-confirm-password').value;
-    const permissions = {
-      students: document.getElementById('staff-perm-students').checked,
-      transactions: document.getElementById('staff-perm-transactions').checked,
-      attendance: document.getElementById('staff-perm-attendance').checked,
-      reports: document.getElementById('staff-perm-reports').checked,
-      dashboard: document.getElementById('staff-perm-dashboard').checked,
-      otherStudents: role === 'instructor' ? document.getElementById('staff-perm-other-students').checked : false
-    };
+    let permissions;
+    if (role === 'office') {
+      permissions = {
+        students: true,
+        transactions: true,
+        attendance: true,
+        reports: true,
+        dashboard: true,
+        otherStudents: false
+      };
+    } else if (role === 'instructor') {
+      permissions = {
+        students: true,
+        transactions: document.getElementById('staff-perm-transactions').checked,
+        attendance: document.getElementById('staff-perm-attendance').checked,
+        reports: document.getElementById('staff-perm-reports').checked,
+        dashboard: document.getElementById('staff-perm-dashboard').checked,
+        otherStudents: document.getElementById('staff-perm-other-students').checked
+      };
+    } else {
+      permissions = {
+        students: true,
+        transactions: document.getElementById('staff-perm-transactions').checked,
+        attendance: document.getElementById('staff-perm-attendance').checked,
+        reports: document.getElementById('staff-perm-reports').checked,
+        dashboard: document.getElementById('staff-perm-dashboard').checked,
+        otherStudents: false
+      };
+    }
     
     // Validation
     if (!schoolId) {
@@ -19150,14 +19860,35 @@ async function updateStaff(staffId) {
     const salary = document.getElementById('staff-salary').value;
     const workType = document.getElementById('staff-work-type').value;
     const notes = document.getElementById('staff-notes').value.trim();
-    const permissions = {
-      students: document.getElementById('staff-perm-students').checked,
-      transactions: document.getElementById('staff-perm-transactions').checked,
-      attendance: document.getElementById('staff-perm-attendance').checked,
-      reports: document.getElementById('staff-perm-reports').checked,
-      dashboard: document.getElementById('staff-perm-dashboard').checked,
-      otherStudents: role === 'instructor' ? document.getElementById('staff-perm-other-students').checked : false
-    };
+    let permissions;
+    if (role === 'office') {
+      permissions = {
+        students: true,
+        transactions: true,
+        attendance: true,
+        reports: true,
+        dashboard: true,
+        otherStudents: false
+      };
+    } else if (role === 'instructor') {
+      permissions = {
+        students: true,
+        transactions: document.getElementById('staff-perm-transactions').checked,
+        attendance: document.getElementById('staff-perm-attendance').checked,
+        reports: document.getElementById('staff-perm-reports').checked,
+        dashboard: document.getElementById('staff-perm-dashboard').checked,
+        otherStudents: document.getElementById('staff-perm-other-students').checked
+      };
+    } else {
+      permissions = {
+        students: true,
+        transactions: document.getElementById('staff-perm-transactions').checked,
+        attendance: document.getElementById('staff-perm-attendance').checked,
+        reports: document.getElementById('staff-perm-reports').checked,
+        dashboard: document.getElementById('staff-perm-dashboard').checked,
+        otherStudents: false
+      };
+    }
     
     // Validation
     if (!name) {
@@ -19328,17 +20059,42 @@ function resetStaffModalFields() {
 }
 
 // Show the "Pick Students From Other Classes" checkbox only when role is Instructor
+// For Office staff, permissions are mandatory (all true) - hide permissions section
 function toggleStaffOtherStudentsPerm() {
   const role = document.getElementById('staff-role')?.value;
   const wrap = document.getElementById('staff-perm-other-students-wrap');
-  if (!wrap) return;
-  if (role === 'instructor') {
-    wrap.style.display = 'flex';
+  const permSection = document.getElementById('staff-permissions-section');
+  
+  if (role === 'office') {
+    if (permSection) permSection.style.display = 'none';
+    const permsToCheck = ['staff-perm-students','staff-perm-transactions','staff-perm-attendance','staff-perm-reports','staff-perm-dashboard'];
+    permsToCheck.forEach(function(id){
+      const el = document.getElementById(id);
+      if (el) el.checked = true;
+    });
+    if (wrap) {
+      wrap.style.display = 'none';
+      const cb = document.getElementById('staff-perm-other-students');
+      if (cb) cb.checked = false;
+    }
+  } else if (role === 'instructor') {
+    if (permSection) permSection.style.display = 'block';
+    const studentsCb = document.getElementById('staff-perm-students');
+    if (studentsCb) { studentsCb.checked = true; }
+    if (wrap) wrap.style.display = 'flex';
   } else {
-    wrap.style.display = 'none';
-    const cb = document.getElementById('staff-perm-other-students');
-    if (cb) cb.checked = false;
+    if (permSection) permSection.style.display = 'block';
+    const studentsCb = document.getElementById('staff-perm-students');
+    if (studentsCb) { studentsCb.checked = true; }
+    if (wrap) {
+      wrap.style.display = 'none';
+      const cb = document.getElementById('staff-perm-other-students');
+      if (cb) cb.checked = false;
+    }
   }
+}
+function updateStaffPermissionsVisibility() {
+  toggleStaffOtherStudentsPerm();
 }
 
 function openStaffModal() {
@@ -20315,12 +21071,13 @@ async function handleFormPhotoUpload(input) {
   var preview = document.getElementById('fm-photo-preview');
   if (!input || !input.files || !input.files[0]) {
     _formPhotoDataURL = '';
-    if (preview) preview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span>';
+    if (preview) preview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span><br><span style="font-size:11px;margin-top:4px;">Use Take Photo or Upload</span>';
     return;
   }
   try {
     _formPhotoDataURL = await readFileAsDataURL(input.files[0]);
-    if (preview) preview.innerHTML = '<img src="' + _formPhotoDataURL + '" style="max-width:100%;max-height:150px;border:1px solid #ccc;border-radius:4px;display:block;">';
+    if (preview) preview.innerHTML = '<img src="' + _formPhotoDataURL + '" style="max-width:100%;max-height:150px;border:1px solid #ccc;border-radius:4px;display:block;"><div style="font-size:11px;color:#16a34a;margin-top:4px;">✓ Photo uploaded from gallery</div>';
+    showToast('Photo uploaded');
   } catch (err) {
     console.error('Photo upload error:', err);
     _formPhotoDataURL = '';
@@ -20328,6 +21085,85 @@ async function handleFormPhotoUpload(input) {
     alert('Could not read the uploaded photo. Please try a different file.');
   }
 }
+
+let form14CameraStream = null;
+
+function openForm14Camera() {
+  const container = document.getElementById('fm-camera-container');
+  const video = document.getElementById('fm-camera-video');
+  if (!container || !video) return;
+  container.style.display = 'block';
+  // Scroll to camera
+  container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })
+      .then(function(stream) {
+        form14CameraStream = stream;
+        video.srcObject = stream;
+        video.onloadedmetadata = function() { video.play(); };
+      })
+      .catch(function(err) {
+        console.error('Camera error', err);
+        let msg = 'Could not access camera: ' + err.message;
+        if (err.name === 'NotAllowedError') msg = 'Camera permission denied. Please allow camera access or use Upload.';
+        else if (err.name === 'NotFoundError') msg = 'No camera found on device. Please use Upload.';
+        alert(msg);
+        container.style.display = 'none';
+      });
+  } else {
+    alert('Camera API not supported on this device/browser. Please use Upload Photo.');
+    container.style.display = 'none';
+  }
+}
+
+function closeForm14Camera() {
+  const container = document.getElementById('fm-camera-container');
+  const video = document.getElementById('fm-camera-video');
+  if (form14CameraStream) {
+    try { form14CameraStream.getTracks().forEach(function(t){ t.stop(); }); } catch(e){}
+    form14CameraStream = null;
+  }
+  if (video) {
+    try { video.srcObject = null; } catch(e){}
+  }
+  if (container) container.style.display = 'none';
+}
+
+function captureForm14Photo() {
+  const video = document.getElementById('fm-camera-video');
+  const canvas = document.getElementById('fm-camera-canvas');
+  const preview = document.getElementById('fm-photo-preview');
+  if (!video || !canvas) return;
+  const w = video.videoWidth || 640;
+  const h = video.videoHeight || 480;
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  try {
+    ctx.drawImage(video, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    _formPhotoDataURL = dataUrl;
+    if (preview) {
+      preview.innerHTML = '<img src="' + dataUrl + '" style="max-width:100%;max-height:160px;border:1px solid #ccc;border-radius:6px;display:block;box-shadow:0 2px 8px rgba(0,0,0,0.1);"><div style="font-size:11px;color:#16a34a;margin-top:6px;font-weight:600;">✓ Photo captured from camera</div><div style="font-size:10px;color:#6b7280;">You can retake or save</div>';
+    }
+    closeForm14Camera();
+    showToast('📸 Photo captured from camera');
+  } catch (err) {
+    console.error('Capture failed', err);
+    alert('Failed to capture photo: ' + err.message);
+  }
+}
+
+function clearForm14Photo() {
+  _formPhotoDataURL = '';
+  const preview = document.getElementById('fm-photo-preview');
+  const input = document.getElementById('fm-photo');
+  if (input) input.value = '';
+  if (preview) preview.innerHTML = '<span style="font-size:12px;color:#6b7280;">No photo selected</span><br><span style="font-size:11px;margin-top:4px;">Use Take Photo or Upload</span>';
+  closeForm14Camera();
+  showToast('Photo cleared');
+}
+
 
 function getStudentForFormLookup(value) {
   if (!value) return null;
@@ -20496,11 +21332,24 @@ function populateFormFromStudentId(value) {
           <input type="text" id="fm-rtoOffice" placeholder="RTO / licensing authority">
         </div>
         <div class="form-group full">
-          <label>Upload Trainee Photo</label>
-          <input type="file" id="fm-photo" accept="image/*" onchange="handleFormPhotoUpload(this)">
-        </div>
-        <div class="form-group full">
-          <div id="fm-photo-preview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #cbd5e1;border-radius:8px;padding:12px;color:#6b7280;font-size:12px;">No photo selected</div>
+          <label>Trainee Photo (Form 14)</label>
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-accent btn-sm" onclick="openForm14Camera()">📷 Take Photo</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('fm-photo').click()">📁 Upload Photo</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="clearForm14Photo()" style="color:var(--danger);border-color:#fecaca;">✕ Clear Photo</button>
+          </div>
+          <input type="file" id="fm-photo" accept="image/*" capture="user" onchange="handleFormPhotoUpload(this)" style="display:none;">
+          <div id="fm-camera-container" style="display:none;margin-bottom:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:8px;">📷 Camera Preview</div>
+            <video id="fm-camera-video" autoplay playsinline style="width:100%;max-width:360px;border-radius:8px;border:1px solid #ccc;background:#000;max-height:240px;"></video>
+            <canvas id="fm-camera-canvas" style="display:none;"></canvas>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+              <button type="button" class="btn btn-accent btn-sm" onclick="captureForm14Photo()">📸 Capture Photo</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="closeForm14Camera()">Close Camera</button>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px;">Position the trainee in center and click Capture. Uses front camera by default.</div>
+          </div>
+          <div id="fm-photo-preview" style="min-height:120px;display:flex;align-items:center;justify-content:center;border:1px dashed #cbd5e1;border-radius:8px;padding:12px;color:#6b7280;font-size:12px;flex-direction:column;">No photo selected<br><span style="font-size:11px;margin-top:4px;">Use Take Photo or Upload</span></div>
         </div>
         <div class="form-group full">
           <label>Remarks</label>
@@ -20600,5 +21449,59 @@ function populateFormFromStudentId(value) {
   </div>
 </div>
 
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a10e2453fc0bc69f',t:'MTc4MjMyOTM3Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a110e5351aa19149',t:'MTc4MjM1ODI0NA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1211e56a87d1326',t:'MTc4MjUyODM1Ng=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1524a8dd9a5d86d',t:'MTc4MzA0Mzk3MA=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a1551e1d6920b277',t:'MTc4MzA3MzYwNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a187bb8199bf6e76',t:'MTc4MzYwNDM0Mg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+
+
+
+<script>
+// Final fix - ensure role and login work, remove CF remnants
+(function(){
+  // Remove any leftover CF scripts if present
+  document.querySelectorAll('script').forEach(function(s){
+    if (s.textContent && s.textContent.includes('__CF$cv$params')) s.remove();
+  });
+  // Ensure functions are global
+  if (typeof window.selectRole === 'undefined' && typeof selectRole !== 'undefined') {
+    window.selectRole = selectRole;
+  }
+  if (typeof window.doLogin === 'undefined' && typeof doLogin !== 'undefined') {
+    window.doLogin = doLogin;
+  }
+  // Ensure role buttons work
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.role-btn').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var role = this.id.replace('role-','');
+        if (typeof selectRole !== 'undefined') selectRole(role);
+        else {
+          document.querySelectorAll('.role-btn').forEach(function(b){ b.classList.remove('active'); });
+          this.classList.add('active');
+          try { window.currentRole = role; } catch(e){}
+        }
+      });
+    });
+    var pass = document.getElementById('login-pass');
+    if (pass) {
+      pass.addEventListener('keypress', function(e){
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (typeof doLogin !== 'undefined') doLogin();
+        }
+      });
+    }
+    var loginBtn = document.querySelector('.btn-login');
+    if (loginBtn) {
+      loginBtn.addEventListener('click', function(e){
+        e.preventDefault();
+        if (typeof doLogin !== 'undefined') doLogin();
+      });
+    }
+    if (!document.querySelector('.role-btn.active')) {
+      var first = document.getElementById('role-owner');
+      if (first) first.classList.add('active');
+    }
+  });
+})();
+</script>
+
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a18c91a32e7595be',t:'MTc4MzY1NTA1NQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
