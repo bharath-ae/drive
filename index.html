@@ -441,7 +441,7 @@ footer a:hover{color:var(--gold-light)}
 <div id="admin">
   <div class="in">
     <div class="top">
-      <div><h1 class="display">Owner Panel</h1><p class="tag">HS Gold Company · Daily rate update</p></div>
+      <div><h1 class="display">Owner Panel</h1><p class="tag">HS Gold Company · Daily rate update · v6</p></div>
       <button class="link" id="aClose">Close ✕</button>
     </div>
 
@@ -611,8 +611,9 @@ footer a:hover{color:var(--gold-light)}
     $('#a24').value=cfg.rates['24k'];$('#a22').value=cfg.rates['22k'];manual.a22=true;setTimeout(function(){manual.a22=false},0);
     if(cfg.apiUrl){$('#aDl').textContent='Save & publish now';$('#aPinCard').style.display='none';$('#aNote').innerHTML='Customers see the new rate <b>automatically within a minute</b>. Nothing to upload.';
       if(window.__liveRates){$('#a24').value=window.__liveRates['24k'];$('#a22').value=window.__liveRates['22k']}}
-    autoUnlock();}
-  function hideAdmin(){admin.classList.remove('open');document.body.style.overflow='';
+    lockPanel();}
+  function lockPanel(){unlocked=false;curPin='';$('#aMain').style.display='none';$('#aLogin').style.display='block';$('#aPin').value='';$('#aLoginMsg').textContent='';$('#aMsg').textContent=''}
+  function hideAdmin(){lockPanel();admin.classList.remove('open');document.body.style.overflow='';
     if(location.hash==='#hs-gold-panel') history.replaceState(null,'',location.pathname+location.search)}
   function route(){ if(location.hash==='#hs-gold-panel') showAdmin(); }
   window.addEventListener('hashchange',route);
@@ -626,7 +627,8 @@ footer a:hover{color:var(--gold-light)}
   $('#aClose').addEventListener('click',hideAdmin);
 
   var curPin = '';
-  function openMain(pin){unlocked=true;curPin=pin;try{localStorage.setItem('hsgold_pin',pin)}catch(x){}
+  try{localStorage.removeItem('hsgold_pin');localStorage.removeItem('hsgold_ok')}catch(x){}
+  function openMain(pin){unlocked=true;curPin=pin;
     $('#aLogin').style.display='none';$('#aMain').style.display='block';$('#aPin').value='';$('#aLoginMsg').textContent=''}
   function api(body){return fetch(cfg.apiUrl,{method:'POST',body:JSON.stringify(body)}).then(function(r){return r.json()})}
   function tryUnlock(pin,silent){
@@ -638,10 +640,6 @@ footer a:hover{color:var(--gold-light)}
       }).catch(function(){ if(!silent) $('#aLoginMsg').textContent='Cannot reach the server. Check internet and try again.' });
     } else if(hash(pin)===pinHash) openMain(pin);
     else if(!silent) $('#aLoginMsg').textContent='Wrong PIN. Try again.';
-  }
-  function autoUnlock(){
-    if(unlocked) return; var p=''; try{p=localStorage.getItem('hsgold_pin')||''}catch(x){}
-    if(p) tryUnlock(p,true);
   }
   $('#aGo').addEventListener('click',function(){tryUnlock($('#aPin').value)});
   $('#aPin').addEventListener('keydown',function(e){if(e.key==='Enter')tryUnlock($('#aPin').value)});
