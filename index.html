@@ -25,7 +25,7 @@
   "phone": "+916363117960",
   "showTestimonials": false,
   "sheetUrl": "",
-  "apiUrl": "https://script.google.com/macros/s/AKfycbwtWNkhVZk-EJfreGUpnf9AKp_PDAjam96jujbQ2SdttmZwcfXMn9gHgUa0Fg-GSg/exec"
+  "apiUrl": "https://script.google.com/macros/s/AKfycbwYjQS8TOzvKggaqP2uptvEZV5q4M2d1liINrtMu_xZm_PsC7XF9ZPHzxTquVss_QI/exec"
 }
 </script>
 
@@ -668,9 +668,9 @@ footer a:hover{color:var(--gold-light)}
     window.__liveRates = r; renderRates(r, cfg.rates, new Date().toISOString());
     if(cfg.apiUrl){
       $('#aMsg').textContent='Publishing…';
-      api({action:'set',pin:curPin,rates:r}).then(function(res){
+      api({action:'set',pin:curPin,rates:{'24k':r['24k'],'22k':r['22k'],'18k':Math.round(r['24k']*18/24)}}).then(function(res){
         if(res && res.ok){cfg.rates=r;$('#aMsg').textContent='✓ Published. All customers will see the new rate within a minute. Nothing to upload.'}
-        else $('#aMsg').textContent='Not published: '+((res&&res.error)==='pin'?'PIN does not match the server.':'server problem, try again.');
+        else $('#aMsg').textContent='Not published: '+((res&&res.error)==='pin'?'PIN does not match the server.':'server said "'+((res&&res.error)||'no reply')+'". Update/redeploy the Apps Script (Code.gs).');
       }).catch(function(){$('#aMsg').textContent='Not published: could not reach the server. Check internet and try again.'});
       return;
     }
