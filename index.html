@@ -13,14 +13,13 @@
 <!-- ============================================================
   OWNER: this is the ONLY block you ever need to edit by hand.
   (Or use the Owner Panel: press Alt + Shift + L on a computer, or open yoursite.com/#hs-gold-panel on a phone)
-  Rates are ₹ per gram. "prev" is yesterday's rate (shows ▲/▼).
+  Rates are ₹ per gram.
   BEST: paste your Apps Script web-app link in "apiUrl" -> rates update live for all customers, no upload (see SETUP_AUTO_UPDATE.md).
   Optional: paste a published Google Sheet CSV link in "sheetUrl" to update rates from a phone (no re-upload).
 ============================================================= -->
 <script id="rate-config" type="application/json">
 {
-  "rates": { "24k": 12500, "22k": 11460, "18k": 9380 },
-  "prev":  { "24k": 12500, "22k": 11460, "18k": 9380 },
+  "rates": { "24k": 12500, "22k": 11460 },
   "updated": "2026-11-15T09:00:00+05:30",
   "pinHash": "82b6a1k97p",
   "phone": "+916363117960",
@@ -105,12 +104,10 @@ nav{max-width:1152px;margin:0 auto;padding:14px 24px;display:flex;align-items:ce
 .orb .k{font-size:.95rem;color:rgba(237,230,214,.6);margin-top:8px}
 .orb .others{display:flex;gap:18px;margin-top:18px;font-size:.85rem;color:rgba(237,230,214,.6)}
 .orb .upd{margin-top:14px;font-size:.7rem;color:rgba(237,230,214,.4)}
-.chg{font-size:.7em;margin-left:4px;font-weight:600}
-.up{color:#6fcf8e}.down{color:#f08a7a}
 
 /* rates strip + calculator */
 #rates{background:var(--ivory)}
-.rate-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:32px}
+.rate-cards{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:32px}
 .rc{background:#fff;border:1px solid rgba(28,26,22,.1);border-top:3px solid var(--gold);padding:18px 14px;text-align:center;border-radius:2px}
 .rc .kk{font-size:.8rem;letter-spacing:.06em;opacity:.6}
 .rc .vv{font-family:var(--display);font-size:clamp(1.3rem,4vw,2rem);margin-top:4px}
@@ -277,10 +274,9 @@ footer a:hover{color:var(--gold-light)}
         <div class="orb float-slow">
           <small class="t">TODAY'S RATE PER GRAM</small>
           <div class="big">₹<span data-rate="24k">—</span></div>
-          <div class="k">24K Gold <span class="chg" data-chg="24k"></span></div>
+          <div class="k">24K Gold</div>
           <div class="others">
-            <span>22K: ₹<span data-rate="22k">—</span> <span class="chg" data-chg="22k"></span></span>
-            <span>18K: ₹<span data-rate="18k">—</span> <span class="chg" data-chg="18k"></span></span>
+            <span>22K: ₹<span data-rate="22k">—</span></span>
           </div>
           <div class="upd">Updated <span data-updated></span></div>
         </div>
@@ -297,13 +293,12 @@ footer a:hover{color:var(--gold-light)}
       <p class="sub">Updated by our team every day. Last updated <b data-updated></b>.</p>
     </div>
     <div class="rate-cards reveal">
-      <div class="rc"><div class="kk">24K</div><div class="vv">₹<span data-rate="24k"></span></div><div class="per">per gram <span class="chg" data-chg="24k"></span></div></div>
-      <div class="rc"><div class="kk">22K</div><div class="vv">₹<span data-rate="22k"></span></div><div class="per">per gram <span class="chg" data-chg="22k"></span></div></div>
-      <div class="rc"><div class="kk">18K</div><div class="vv">₹<span data-rate="18k"></span></div><div class="per">per gram <span class="chg" data-chg="18k"></span></div></div>
+      <div class="rc"><div class="kk">24K</div><div class="vv">₹<span data-rate="24k"></span></div><div class="per">per gram</div></div>
+      <div class="rc"><div class="kk">22K</div><div class="vv">₹<span data-rate="22k"></span></div><div class="per">per gram</div></div>
     </div>
     <div class="calc reveal">
       <div><label for="cPur">Gold purity</label>
-        <select id="cPur"><option value="24k">24K</option><option value="22k" selected>22K (jewellery)</option><option value="18k">18K</option></select></div>
+        <select id="cPur"><option value="24k">24K</option><option value="22k" selected>22K (jewellery)</option></select></div>
       <div><label for="cGr">Weight (grams)</label><input id="cGr" type="number" min="0" step="0.01" value="10" inputmode="decimal"></div>
       <div class="out"><small>Estimated value</small><b id="cOut">₹0</b><small>Indicative only. Final value after purity test &amp; weighing.</small></div>
     </div>
@@ -462,12 +457,11 @@ footer a:hover{color:var(--gold-light)}
         <h2>Today's gold rate (₹ per gram)</h2>
         <label>24K gold rate — type only this</label>
         <input type="number" id="a24" min="0" step="1" inputmode="decimal" style="font-size:1.6rem;padding:14px" placeholder="e.g. 12500">
-        <div class="g3" style="margin-top:14px">
+        <div class="g3" style="margin-top:14px;grid-template-columns:repeat(2,1fr)">
           <div><label>22K (auto)</label><input type="number" id="a22" min="0" step="1" inputmode="decimal"></div>
-          <div><label>18K (auto)</label><input type="number" id="a18" min="0" step="1" inputmode="decimal"></div>
           <div><label>Less per gram (optional)</label><input type="number" id="aLess" min="0" step="1" value="0" inputmode="decimal"></div>
         </div>
-        <p class="note" style="margin:0 0 6px">22K and 18K fill in by themselves. "Less per gram" is taken off each rate (your margin). You can still edit 22K / 18K by hand.</p>
+        <p class="note" style="margin:0 0 6px">22K fills in by itself. "Less per gram" is taken off the 22K rate (your margin). You can still edit 22K by hand.</p>
         <button class="ab" id="aDl">Save today's rate</button>
         <p class="msg" id="aMsg"></p>
         <p class="note" id="aNote"><b>Then:</b> upload the downloaded <code>index.html</code> to your hosting (replace the old file). That's all.</p>
@@ -496,14 +490,8 @@ footer a:hover{color:var(--gold-light)}
 
   /* ---------- rates ---------- */
   function renderRates(r, prev, updated){
-    ['24k','22k','18k'].forEach(function(k){
+    ['24k','22k'].forEach(function(k){
       $$('[data-rate="'+k+'"]').forEach(function(el){el.textContent = fmt(r[k])});
-      $$('[data-chg="'+k+'"]').forEach(function(el){
-        var d = r[k] - (prev && prev[k] != null ? prev[k] : r[k]);
-        if(!d){el.textContent='';el.className='chg';return;}
-        el.textContent = (d>0?'▲ ':'▼ ') + fmt(Math.abs(d));
-        el.className = 'chg ' + (d>0?'up':'down');
-      });
     });
     var u = new Date(updated);
     var txt = isNaN(u) ? '' : u.toLocaleString('en-IN',{day:'numeric',month:'short',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Asia/Kolkata'});
@@ -516,7 +504,7 @@ footer a:hover{color:var(--gold-light)}
     $('#cOut').textContent = '₹' + fmt(Math.round(rate * g));
   }
   window.__liveRates = cfg.rates;
-  renderRates(cfg.rates, cfg.prev, cfg.updated);
+  renderRates(cfg.rates, null, cfg.updated);
   $('#cPur').addEventListener('change',calc);
   $('#cGr').addEventListener('input',calc);
 
@@ -529,8 +517,8 @@ footer a:hover{color:var(--gold-light)}
     fetch(cfg.sheetUrl + (cfg.sheetUrl.indexOf('?')>-1?'&':'?') + 't=' + Date.now()).then(function(r){return r.text()}).then(function(csv){
       var rows = csv.trim().split(/\r?\n/).map(function(l){return l.split(',').map(function(c){return c.replace(/^"|"$/g,'').trim()})});
       var v = rows[1]; if(!v) return;
-      var r = {'24k':parseFloat(v[0]),'22k':parseFloat(v[1]),'18k':parseFloat(v[2])};
-      if(!(r['24k']>0&&r['22k']>0&&r['18k']>0)) return;
+      var r = {'24k':parseFloat(v[0]),'22k':parseFloat(v[1])};
+      if(!(r['24k']>0&&r['22k']>0)) return;
       window.__liveRates = r;
       renderRates(r, cfg.rates, cfg.updated);
       if(v[3]) $$('[data-updated]').forEach(function(el){el.textContent=v[3]});
@@ -543,9 +531,9 @@ footer a:hover{color:var(--gold-light)}
     fetch(u).then(function(r){return r.json()}).then(function(d){
       if(!d || !d.rates) return;
       var r = d.rates;
-      if(!(r['24k']>0 && r['22k']>0 && r['18k']>0)) return;
+      if(!(r['24k']>0 && r['22k']>0)) return;
       window.__liveRates = r;
-      renderRates(r, d.prev || r, d.updated || cfg.updated);
+      renderRates(r, null, d.updated || cfg.updated);
     }).catch(function(){});
   }
   if(cfg.apiUrl){
@@ -620,9 +608,9 @@ footer a:hover{color:var(--gold-light)}
   var admin = $('#admin'), pinHash = cfg.pinHash, unlocked = false;
 
   function showAdmin(){admin.classList.add('open');document.body.style.overflow='hidden';closePop();
-    $('#a24').value=cfg.rates['24k'];$('#a22').value=cfg.rates['22k'];$('#a18').value=cfg.rates['18k'];manual.a22=manual.a18=true;setTimeout(function(){manual.a22=manual.a18=false},0);
+    $('#a24').value=cfg.rates['24k'];$('#a22').value=cfg.rates['22k'];manual.a22=true;setTimeout(function(){manual.a22=false},0);
     if(cfg.apiUrl){$('#aDl').textContent='Save & publish now';$('#aPinCard').style.display='none';$('#aNote').innerHTML='Customers see the new rate <b>automatically within a minute</b>. Nothing to upload.';
-      if(window.__liveRates){$('#a24').value=window.__liveRates['24k'];$('#a22').value=window.__liveRates['22k'];$('#a18').value=window.__liveRates['18k']}}
+      if(window.__liveRates){$('#a24').value=window.__liveRates['24k'];$('#a22').value=window.__liveRates['22k']}}
     autoUnlock();}
   function hideAdmin(){admin.classList.remove('open');document.body.style.overflow='';
     if(location.hash==='#hs-gold-panel') history.replaceState(null,'',location.pathname+location.search)}
@@ -658,23 +646,21 @@ footer a:hover{color:var(--gold-light)}
   $('#aGo').addEventListener('click',function(){tryUnlock($('#aPin').value)});
   $('#aPin').addEventListener('keydown',function(e){if(e.key==='Enter')tryUnlock($('#aPin').value)});
 
-  var manual = {a22:false,a18:false};
+  var manual = {a22:false};
   function autoFill(){
     var base = +$('#a24').value, less = +$('#aLess').value || 0;
     if(!(base>0)) return;
     if(!manual.a22) $('#a22').value = Math.round(base*22/24 - less);
-    if(!manual.a18) $('#a18').value = Math.round(base*18/24 - less);
   }
   $('#a24').addEventListener('input',autoFill);
-  $('#aLess').addEventListener('input',function(){manual.a22=manual.a18=false;autoFill()});
+  $('#aLess').addEventListener('input',function(){manual.a22=false;autoFill()});
   $('#a22').addEventListener('input',function(){manual.a22=true});
-  $('#a18').addEventListener('input',function(){manual.a18=true});
 
   route();
 
   function readRates(){
-    var r = {'24k':+$('#a24').value,'22k':+$('#a22').value,'18k':+$('#a18').value};
-    if(!(r['24k']>0 && r['22k']>0 && r['18k']>0)){$('#aMsg').textContent='Please enter all three rates (greater than 0).';return null}
+    var r = {'24k':+$('#a24').value,'22k':+$('#a22').value};
+    if(!(r['24k']>0 && r['22k']>0)){$('#aMsg').textContent='Please enter both rates (greater than 0).';return null}
     return r;
   }
   $('#aDl').addEventListener('click',function(){
@@ -688,10 +674,8 @@ footer a:hover{color:var(--gold-light)}
       }).catch(function(){$('#aMsg').textContent='Not published: could not reach the server. Check internet and try again.'});
       return;
     }
-    var changed = r['24k']!==cfg.rates['24k']||r['22k']!==cfg.rates['22k']||r['18k']!==cfg.rates['18k'];
     var next = {
       rates:r,
-      prev: changed ? cfg.rates : cfg.prev,
       updated: new Date().toISOString(),
       pinHash: pinHash,
       phone: cfg.phone,
